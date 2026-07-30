@@ -6,7 +6,6 @@ from supabase import create_client, Client
 # --- 1. CONFIGURACIÓN VISUAL Y DE MEMORIA ---
 st.set_page_config(page_title="Control Go - Operaciones", layout="wide")
 
-# Inicializador del Poka-yoke de limpieza de tabla
 if 'limpiador_tab1' not in st.session_state:
     st.session_state['limpiador_tab1'] = 0
 
@@ -35,7 +34,7 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- 3. VARIABLES GLOBALES ---
+# --- 3. VARIABLES GLOBALES Y FUNCIONES ---
 opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "GOATE"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 opciones_estado = ["POR ARMAR", "ARMADO", "ENTREGADO", "ANULADO", "DEVOLUCION", "REAGENDADO"]
@@ -71,6 +70,14 @@ def descargar_datos_seguros(nombre_tabla):
         st.error(f"❌ ERROR CRÍTICO: No se pudo leer la tabla '{nombre_tabla}'. Detalle: {e}")
         return None
 
+# NUEVO POKA-YOKE: Estandarización estricta de formato de fecha
+def procesar_fecha(valor):
+    if pd.isna(valor) or valor == "":
+        return ""
+    if hasattr(valor, 'strftime'):
+        return valor.strftime("%d/%m/%Y")
+    return str(valor)
+
 st.title("📦 Panel de Control Operativo")
 tab1, tab2, tab3, tab4 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas por Día", "✏️ Editar Pedidos", "📊 Maestro de Inventario"])
 
@@ -78,7 +85,6 @@ tab1, tab2, tab3, tab4 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas por Día",
 with tab1:
     st.header("Ingreso de ventas")
     
-    # 1. Recuperar y mostrar mensajes guardados en memoria después de refrescar
     if 'msg_exito' in st.session_state:
         st.success(st.session_state['msg_exito'])
         del st.session_state['msg_exito']
@@ -94,12 +100,14 @@ with tab1:
         "distrito", "medio", "monto", "direccion", "producto", "business", "observaciones"
     ])
     
-    # 2. La tabla ahora usa la variable 'limpiador' para generar una vista fresca cada vez
     df_editado = st.data_editor(
         df_base, 
         num_rows="dynamic",
         key=f"editor_pedidos_{st.session_state['limpiador_tab1']}",
         column_config={
+            # POKA-YOKE VISUAL: Columna de fecha con calendario forzado
+            "fecha_pedido": st.column_config.DateColumn("Fecha Pedido", format="DD/MM/YYYY"),
+            "fecha_entrega": st.column_config.DateColumn("Fecha Entrega", format="DD/MM/YYYY"),
             "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio),
             "monto": st.column_config.NumberColumn("Monto", format="S/ %.2f"),
             "business": st.column_config.SelectboxColumn("Business", options=opciones_business),
@@ -155,8 +163,8 @@ with tab1:
                     ultimo_numero += 1
                     nuevos_registros.append({
                         "id_pedido": f"CG-{ultimo_numero}",
-                        "fecha_pedido": str(row['fecha_pedido']),
-                        "fecha_entrega": str(row['fecha_entrega']),
+                        "fecha_pedido": procesar_fecha(row['fecha_pedido']),
+                        "fecha_entrega": procesar_fecha(row['fecha_entrega']),
                         "nombre": str(row['nombre']),
                         "celular": str(row['celular']),
                         "distrito": str(row['distrito']),
@@ -174,13 +182,12 @@ with tab1:
                     for op in operaciones_descuento:
                         supabase.table("inventario").update({"stock_actual": op['nuevo_stock']}).eq("sku", op['sku']).execute()
                     
-                    # 3. Guardar mensajes y activar el limpiador
                     st.session_state['msg_exito'] = f"✅ ¡{len(nuevos_registros)} pedidos registrados en la nube!"
                     if alertas_stock:
                         st.session_state['msg_alertas'] = list(set(alertas_stock))
                     
-                    st.session_state['limpiador_tab1'] += 1 # Cambia la llave de la tabla
-                    st.rerun() # Refresca la pantalla al instante
+                    st.session_state['limpiador_tab1'] += 1 
+                    st.rerun() 
                         
                 except Exception as e:
                     st.error(f"❌ Error al guardar en la nube: {e}")

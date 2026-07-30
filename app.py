@@ -6,7 +6,6 @@ import datetime
 # Configuración visual de la página
 st.set_page_config(page_title="Control Go - Operaciones", layout="wide")
 
-# Diseño corporativo (Minimalista B/N con acentos turquesa)
 st.markdown("""
     <style>
     .stButton>button {
@@ -19,25 +18,30 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 1. MOTOR DE BASE DE DATOS (VERSIÓN 2 - Estructura Completa Excel)
+# Lista global de opciones (para usarse en ambas pestañas)
+opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB"]
+opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
+opciones_estado = ["POR ARMAR", "ARMADO", "ENTREGADO", "ANULADO", "DEVOLUCION", "REAGENDADO"]
+
+# 1. MOTOR DE BASE DE DATOS (VERSIÓN 4)
 def inicializar_bd():
-    with sqlite3.connect('control_go_v2.db') as conn:
+    with sqlite3.connect('control_go_v4.db') as conn:
         cursor = conn.cursor()
-        # Tabla de inventario
         cursor.execute('''CREATE TABLE IF NOT EXISTS inventario (sku TEXT PRIMARY KEY, nombre TEXT, stock_actual INTEGER, punto_reorden INTEGER)''')
-        # Nueva estructura de la tabla de pedidos
         cursor.execute('''CREATE TABLE IF NOT EXISTS pedidos (
             id_pedido TEXT PRIMARY KEY, 
             fecha_pedido TEXT, 
             fecha_entrega TEXT, 
             nombre TEXT, 
             celular TEXT, 
+            distrito TEXT,
             medio TEXT, 
             monto REAL, 
             direccion TEXT, 
             producto TEXT, 
-            business TEXT, 
-            estado TEXT DEFAULT 'Pendiente'
+            business TEXT,
+            observaciones TEXT, 
+            estado TEXT DEFAULT 'POR ARMAR'
         )''')
         conn.commit()
 
@@ -46,91 +50,134 @@ inicializar_bd()
 # 2. INTERFAZ VISUAL
 st.title("📦 Panel de Control Operativo")
 
-tab1, tab2, tab3 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas y Despachos", "⚠️ Alertas de Inventario"])
+tab1, tab2, tab3 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas por Día", "⚠️ Alertas de Inventario"])
 
-# --- PESTAÑA 1: AGENDAR (Celdas Interactivas y Desplegables) ---
+# --- PESTAÑA 1: AGENDAR ---
 with tab1:
     st.header("Ingreso de ventas")
-    st.write("Copia y pega desde tu Excel, o haz doble clic en las celdas para usar los menús desplegables.")
+    st.write("Copia y pega desde tu Excel. Observaciones al final.")
     
-    # Lista de opciones para los desplegables
-    opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB"]
-    opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
-    
-    # Crear tabla vacía con las columnas exactas de tu Excel
+    # Agregado "observaciones" al final
     df_base = pd.DataFrame(columns=[
         "id_pedido", "fecha_pedido", "fecha_entrega", "nombre", "celular", 
-        "medio", "monto", "direccion", "producto", "business"
+        "distrito", "medio", "monto", "direccion", "producto", "business", "observaciones"
     ])
     
-    # Configurar el editor de celdas
     df_editado = st.data_editor(
         df_base, 
         num_rows="dynamic",
         column_config={
             "id_pedido": st.column_config.TextColumn("ID", required=True),
-            "fecha_pedido": st.column_config.TextColumn("Fecha Pedido (DD/MM/YYYY)"), # Cambiado a Texto
-            "fecha_entrega": st.column_config.TextColumn("Fecha Entrega (DD/MM/YYYY)"), # Cambiado a Texto
+            "fecha_pedido": st.column_config.TextColumn("Fecha Pedido (DD/MM/YYYY)"),
+            "fecha_entrega": st.column_config.TextColumn("Fecha Entrega (DD/MM/YYYY)"),
             "nombre": st.column_config.TextColumn("Nombre del Cliente", required=True),
             "celular": st.column_config.TextColumn("Celular"),
+            "distrito": st.column_config.TextColumn("Distrito"),
             "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio, required=True),
             "monto": st.column_config.NumberColumn("Monto", format="S/ %.2f", min_value=0.0),
             "direccion": st.column_config.TextColumn("Dirección"),
-            "producto": st.column_config.TextColumn("Producto (Ej: 1 SKU1 + 3 SKU2)", required=True),
-            "business": st.column_config.SelectboxColumn("Business", options=opciones_business, required=True)
+            "producto": st.column_config.TextColumn("Producto", required=True),
+            "business": st.column_config.SelectboxColumn("Business", options=opciones_business, required=True),
+            "observaciones": st.column_config.TextColumn("Observaciones")
         },
         use_container_width=True
     )
     
-    # Guardar en base de datos
     if st.button("Registrar Pedidos"):
-        # Limpiamos filas vacías asegurándonos de que haya un ID
         df_limpio = df_editado.dropna(subset=['id_pedido'], how='any')
         
         if not df_limpio.empty:
             try:
-                df_limpio['estado'] = 'Pendiente'
-                
-                with sqlite3.connect('control_go_v2.db') as conn:
+                # El estado inicial ahora es "POR ARMAR"
+                df_limpio['estado'] = 'POR ARMAR'
+                with sqlite3.connect('control_go_v4.db') as conn:
                     df_limpio.to_sql('pedidos', conn, if_exists='append', index=False)
-                st.success("✅ Pedidos agendados correctamente. Revisa la pestaña de Despachos.")
+                st.success("✅ Pedidos agendados correctamente.")
             except Exception as e:
-                st.error(f"⚠️ Error. Asegúrate de no repetir el ID de un pedido ya registrado. Detalle: {e}")
+                st.error(f"⚠️ Error. Asegúrate de no repetir el ID. Detalle: {e}")
         else:
             st.warning("⚠️ Rellena al menos el campo de ID antes de guardar.")
 
-# --- PESTAÑA 2: DESPACHOS ---
+# --- PESTAÑA 2: RUTAS Y DESPACHOS (VISIÓN 2x2) ---
 with tab2:
-    st.header("Gestión de Entregas")
+    st.header("Torre de Control de Despachos")
     
-    with sqlite3.connect('control_go_v2.db') as conn:
-        # Traemos todas las columnas para que el área de rutas tenga el panorama completo
-        query = """
-        SELECT id_pedido, fecha_entrega, nombre, celular, direccion, medio, producto, monto, business 
-        FROM pedidos WHERE estado = 'Pendiente'
-        """
-        df_pendientes = pd.read_sql_query(query, conn)
+    # Selector de fecha (Por defecto: la fecha de hoy en formato DD/MM/YYYY)
+    fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
+    fecha_filtro = st.text_input("📅 Fecha de ruta a procesar (DD/MM/YYYY):", value=fecha_hoy)
     
-    if not df_pendientes.empty:
-        st.dataframe(df_pendientes, use_container_width=True)
+    # Multiselector para elegir los paneles a visualizar
+    medios_seleccionados = st.multiselect(
+        "Selecciona hasta 4 Courier/Medios para visualizar:", 
+        options=opciones_medio, 
+        default=["MD", "ENTRE GO", "URB", "PROV"], 
+        max_selections=4
+    )
+    
+    st.markdown("---")
+    
+    if medios_seleccionados:
+        # Crea la cuadrícula de 2 columnas (para el efecto 2 arriba, 2 abajo)
+        columnas = st.columns(2)
         
-        st.subheader("Actualizar Estado")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            id_actualizar = st.selectbox("ID del Paquete", df_pendientes['id_pedido'])
-        with col2:
-            nuevo_estado = st.selectbox("Nuevo Estado", ["Entregado", "Armado", "Anulado"])
-        with col3:
-            st.write("") 
-            st.write("")
-            if st.button("Guardar Cambio"):
-                with sqlite3.connect('control_go_v2.db') as conn:
-                    conn.execute("UPDATE pedidos SET estado = ? WHERE id_pedido = ?", (nuevo_estado, id_actualizar))
-                    conn.commit()
-                st.success("✅ Actualizado.")
-                st.rerun()
+        for i, medio in enumerate(medios_seleccionados):
+            # i % 2 distribuye alternadamente: panel 1 a la izq, panel 2 a la der, panel 3 a la izq...
+            with columnas[i % 2]:
+                st.subheader(f"🚚 {medio}")
+                
+                with sqlite3.connect('control_go_v4.db') as conn:
+                    # Lógica estricta: Mostrar si es la fecha seleccionada O si está REAGENDADO. 
+                    # NUNCA mostrar si ya se entregó, anuló o devolvió.
+                    query = """
+                    SELECT id_pedido, nombre, celular, distrito, monto, producto, business, estado 
+                    FROM pedidos 
+                    WHERE medio = ? 
+                    AND (fecha_entrega = ? OR estado = 'REAGENDADO')
+                    AND estado NOT IN ('ENTREGADO', 'ANULADO', 'DEVOLUCION')
+                    """
+                    df_medio = pd.read_sql_query(query, conn, params=(medio, fecha_filtro))
+                
+                if not df_medio.empty:
+                    # Tabla editable directo en pantalla
+                    df_rutas = st.data_editor(
+                        df_medio,
+                        key=f"editor_{medio}",
+                        # Bloqueamos todas las celdas para que no las borren por error, EXCEPTO el 'estado'
+                        disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "producto", "business"],
+                        column_config={
+                            "estado": st.column_config.SelectboxColumn(
+                                "Estado", 
+                                options=opciones_estado, 
+                                required=True
+                            )
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Botón individual para guardar cada cuadrícula
+                    if st.button(f"Guardar Cambios - {medio}", key=f"btn_{medio}"):
+                        with sqlite3.connect('control_go_v4.db') as conn:
+                            cambios = 0
+                            for index, row in df_rutas.iterrows():
+                                # Solo impacta la base de datos si cambiaste algo en el menú desplegable
+                                if row['estado'] != df_medio.loc[index, 'estado']:
+                                    conn.execute("UPDATE pedidos SET estado = ? WHERE id_pedido = ?", (row['estado'], row['id_pedido']))
+                                    cambios += 1
+                                    
+                            if cambios > 0:
+                                conn.commit()
+                                st.success(f"✅ Se actualizaron {cambios} estados en {medio}.")
+                                st.rerun() # Refresca para limpiar de la pantalla los que ya se entregaron
+                            else:
+                                st.info("No detecté cambios.")
+                else:
+                    st.info(f"Ruta limpia. No hay paquetes pendientes para {medio} hoy.")
+                
+                st.write("") # Espaciador inferior
+                st.write("")
     else:
-        st.info("No hay paquetes pendientes de despacho.")
+        st.warning("Selecciona al menos un medio de envío para ver sus rutas.")
 
 # --- PESTAÑA 3: INVENTARIO ---
 with tab3:

@@ -38,28 +38,36 @@ st.title("📦 Panel de Control Operativo")
 # Pestañas de navegación
 tab1, tab2, tab3 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas y Despachos", "⚠️ Alertas de Inventario"])
 
-# --- PESTAÑA 1: AGENDAR (Pegar de Excel) ---
+# --- PESTAÑA 1: AGENDAR (Celdas Interactivas) ---
 with tab1:
-    st.header("Ingreso rápido de ventas")
-    st.write("Copia las columnas de tu Excel (ID, Cliente, Distrito, SKU, Cantidad) y pégalas en el recuadro de abajo:")
+    st.header("Ingreso de ventas")
+    st.write("Escribe o pega tus datos directamente en las celdas. Usa el botón '+' para agregar más filas.")
     
-    datos_pegados = st.text_area("Pegar datos aquí:", height=150)
+    # 1. Generar estructura base de la tabla
+    df_base = pd.DataFrame(columns=["id_pedido", "cliente", "distrito", "sku", "cantidad"])
     
+    # 2. Activar el editor de celdas (estilo Excel)
+    df_editado = st.data_editor(
+        df_base, 
+        num_rows="dynamic", # Permite agregar filas dinámicamente
+        use_container_width=True
+    )
+    
+    # 3. Botón de registro
     if st.button("Registrar Pedidos"):
-        if datos_pegados:
+        # Limpiar filas que se hayan dejado en blanco por error
+        df_limpio = df_editado.dropna(how='all')
+        
+        if not df_limpio.empty:
             try:
-                # Leer los datos pegados
-                df = pd.read_csv(io.StringIO(datos_pegados.strip()), sep='\t')
-                df = df.rename(columns={'ID': 'id_pedido', 'Cliente': 'cliente', 'Distrito': 'distrito', 'SKU': 'sku', 'Cantidad': 'cantidad'})
-                df['estado'] = 'Pendiente'
-                
+                df_limpio['estado'] = 'Pendiente'
                 with sqlite3.connect('base_datos.db') as conn:
-                    df.to_sql('pedidos', conn, if_exists='append', index=False)
-                st.success("✅ Pedidos agendados correctamente.")
+                    df_limpio.to_sql('pedidos', conn, if_exists='append', index=False)
+                st.success("✅ Pedidos agendados correctamente. Revisa la pestaña de Despachos.")
             except Exception as e:
-                st.error(f"⚠️ Error al procesar. Asegúrate de copiar los encabezados correctamente. Detalle: {e}")
+                st.error(f"⚠️ Error al procesar. Verifica que el ID no esté duplicado en la base de datos.")
         else:
-            st.warning("Pega los datos antes de registrar.")
+            st.warning("⚠️ La tabla está vacía. Agrega al menos un pedido antes de registrar.")
 
 # --- PESTAÑA 2: DESPACHOS ---
 with tab2:

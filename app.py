@@ -170,49 +170,63 @@ with tab1:
 with tab2:
     st.header("Torre de Control de Despachos")
     
-    # REPARACIÓN DEFINITIVA: Filtro de inclusión positiva (Poka-yoke)
-    estados_activos = ["POR ARMAR", "ARMADO", "REAGENDADO"]
+    # 1. POKA-YOKE: Traer la tabla completa de Supabase (sin filtros de API que causen error)
+    response_pedidos = supabase.table("pedidos").select("*").execute()
+    df_todos = pd.DataFrame(response_pedidos.data)
     
-    response_fechas = supabase.table("pedidos").select("fecha_entrega").in_("estado", estados_activos).execute()
-    lista_fechas = sorted(list(set([str(item['fecha_entrega']) for item in response_fechas.data if item['fecha_entrega'] and item['fecha_entrega'] != "None"])))
-    
-    if not lista_fechas:
-        lista_fechas = [datetime.datetime.now().strftime("%d/%m/%Y")]
-        st.info("No se detectaron fechas agendadas pendientes.")
+    if df_todos.empty:
+        st.info("No hay pedidos registrados en la base de datos todavía. Registra algunos en la Pestaña 1.")
+    else:
+        # 2. Filtrado local con Pandas (Idéntico a Power Query, 100% estable)
+        estados_activos = ["POR ARMAR", "ARMADO", "REAGENDADO"]
+        df_activos = df_todos[df_todos['estado'].isin(estados_activos)].copy()
         
-    fecha_filtro = st.selectbox("📅 Selecciona la fecha de ruta a procesar:", options=lista_fechas)
-    medios_seleccionados = st.multiselect("Courier:", options=opciones_medio, default=["MD", "ENTRE GO", "URB", "PROV"], max_selections=4)
-    
-    if medios_seleccionados:
-        columnas = st.columns(2)
-        for i, medio in enumerate(medios_seleccionados):
-            with columnas[i % 2]:
-                st.subheader(f"🚚 {medio}")
-                
-                # REPARACIÓN DEFINITIVA: Inclusión positiva para cargar las rutas
-                response_medios = supabase.table("pedidos").select("id_pedido, nombre, celular, distrito, monto, producto, business, estado").eq("medio", medio).or_(f"fecha_entrega.eq.{fecha_filtro},estado.eq.REAGENDADO").in_("estado", estados_activos).execute()
-                df_medio = pd.DataFrame(response_medios.data)
-                
-                if not df_medio.empty:
-                    df_rutas = st.data_editor(
-                        df_medio, 
-                        key=f"editor_{medio}", 
-                        disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "producto", "business"], 
-                        column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado, required=True)}, 
-                        use_container_width=True, 
-                        hide_index=True
-                    )
-                    if st.button(f"Guardar Cambios - {medio}", key=f"btn_{medio}"):
-                        cambios = 0
-                        for index, row in df_rutas.iterrows():
-                            if row['estado'] != df_medio.loc[index, 'estado']:
-                                supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
-                                cambios += 1
-                        if cambios > 0:
-                            st.success(f"✅ Se actualizaron {cambios} estados.")
-                            st.rerun()
-                else:
-                    st.info("Ruta limpia.")
+        # Extraer fechas únicas de entrega
+        lista_fechas = sorted(df_activos['fecha_entrega'].dropna().unique().tolist())
+        
+        if not lista_fechas:
+            lista_fechas = [datetime.datetime.now().strftime("%d/%m/%Y")]
+            st.info("No se detectaron fechas agendadas pendientes.")
+            
+        fecha_filtro = st.selectbox("📅 Selecciona la fecha de ruta a procesar:", options=lista_fechas)
+        medios_seleccionados = st.multiselect("Courier:", options=opciones_medio, default=["MD", "ENTRE GO", "URB", "PROV"], max_selections=4)
+        
+        if medios_seleccionados:
+            columnas = st.columns(2)
+            for i, medio in enumerate(medios_seleccionados):
+                with columnas[i % 2]:
+                    st.subheader(f"🚚 {medio}")
+                    
+                    # 3. Aplicar filtros lógicos para la ruta
+                    filtro_medio = df_activos['medio'] == medio
+                    filtro_fecha = (df_activos['fecha_entrega'] == fecha_filtro) | (df_activos['estado'] == "REAGENDADO")
+                    
+                    df_medio = df_activos[filtro_medio & filtro_fecha].copy()
+                    
+                    if not df_medio.empty:
+                        df_rutas = st.data_editor(
+                            df_medio[['id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'producto', 'business', 'estado']], 
+                            key=f"editor_{medio}", 
+                            disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "producto", "business"], 
+                            column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado, required=True)}, 
+                            use_container_width=True, 
+                            hide_index=True
+                        )
+                        
+                        # Botón de guardado
+                        if st.button(f"Guardar Cambios - {medio}", key=f"btn_{medio}"):
+                            cambios = 0
+                            for index, row in df_rutas.iterrows():
+                                estado_original = df_medio.loc[index, 'estado']
+                                if row['estado'] != estado_original:
+                                    # Aquí sí usamos la API solo para actualizar (Update), lo cual nunca falla
+                                    supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
+                                    cambios += 1
+                            if cambios > 0:
+                                st.success(f"✅ Se actualizaron {cambios} estados.")
+                                st.rerun()
+                    else:
+                        st.info("Ruta limpia.")
                     
 # --- PESTAÑA 3: BUSCAR Y EDITAR ---
 with tab3:

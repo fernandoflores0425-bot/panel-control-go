@@ -17,25 +17,19 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN BLINDADA A LA NUBE (CON DIAGNÓSTICO) ---
+# --- 2. CONEXIÓN BLINDADA A LA NUBE ---
 @st.cache_resource
 def init_connection():
     try:
         url = st.secrets["SUPABASE_URL"].strip()
         key = st.secrets["SUPABASE_KEY"].strip()
-        
-        # 🚨 PANEL DE DIAGNÓSTICO EN PANTALLA 🚨
-        st.warning("🔍 MODO DIAGNÓSTICO ACTIVADO:")
-        st.write(f"🌐 URL leída: `{url}`")
-        st.write(f"🔑 Longitud de la Llave: `{len(key)}` caracteres.")
-        st.write(f"✂️ La llave empieza con: `{key[:10]}` y termina con `{key[-10:]}`")
-        
         return create_client(url, key)
     except Exception as e:
         st.error(f"❌ Error leyendo los Secrets: {e}")
         st.stop()
 
 supabase = init_connection()
+
 # --- 3. VARIABLES GLOBALES ---
 opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "GOATE"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
@@ -67,7 +61,7 @@ def descargar_datos_seguros(nombre_tabla):
         respuesta = supabase.table(nombre_tabla).select("*").execute()
         return respuesta.data
     except Exception as e:
-        st.error(f"❌ ERROR CRÍTICO: No se pudo leer la tabla '{nombre_tabla}'. ¿Estás seguro de que la creaste en Supabase SQL Editor? Detalle técnico: {e}")
+        st.error(f"❌ ERROR CRÍTICO: No se pudo leer la tabla '{nombre_tabla}'. Detalle: {e}")
         return None
 
 st.title("📦 Panel de Control Operativo")
@@ -104,7 +98,6 @@ with tab1:
                 
             inventario_db = {item['sku']: item for item in datos_inv}
             error_bloqueante = False
-            alertas_stock = []
             operaciones_descuento = []
             
             for index, row in df_limpio.iterrows():
@@ -162,7 +155,6 @@ with tab1:
 with tab2:
     st.header("Torre de Control de Despachos")
     
-    # Intento seguro de descarga
     datos_crudos_pedidos = descargar_datos_seguros("pedidos")
     
     if datos_crudos_pedidos is not None:
@@ -236,14 +228,32 @@ with tab3:
         else:
             st.info("No hay pedidos para editar.")
 
-if st.button("💾 Guardar y Actualizar Inventario"):
+# --- PESTAÑA 4: INVENTARIO ---
+with tab4:
+    st.header("📊 Maestro de Inventario y Alertas")
+    datos_inv_full = descargar_datos_seguros("inventario")
+    
+    if datos_inv_full is not None:
+        df_inv = pd.DataFrame(datos_inv_full)
+        if df_inv.empty:
+            df_inv = pd.DataFrame(index=range(10), columns=["nombre", "sku", "stock_actual", "precio", "stock_minimo", "stock_ideal"])
+        
+        df_inv_editado = st.data_editor(
+            df_inv, num_rows="dynamic",
+            column_config={
+                "nombre": st.column_config.TextColumn("Nombre", required=True),
+                "sku": st.column_config.TextColumn("SKU", required=True),
+                "stock_actual": st.column_config.NumberColumn("Stock", min_value=0, step=1, required=True),
+            }, use_container_width=True, height=400
+        )
+        
+        if st.button("💾 Guardar y Actualizar Inventario"):
             df_inv_limpio = df_inv_editado.dropna(subset=['sku', 'nombre'], how='any').copy()
             df_inv_limpio['sku'] = df_inv_limpio['sku'].astype(str).str.strip()
             if df_inv_limpio.duplicated(subset=['sku']).any():
                 df_inv_limpio = df_inv_limpio.drop_duplicates(subset=['sku'], keep='last')
             
-            # --- POKA-YOKE: Limpieza estricta de datos (como en Power Query) ---
-            # Forzamos todo a número, si hay un vacío o texto raro, lo vuelve 0
+            # --- POKA-YOKE: Limpieza estricta de datos (forzado a números o cero) ---
             df_inv_limpio['stock_actual'] = pd.to_numeric(df_inv_limpio['stock_actual'], errors='coerce').fillna(0).astype(int)
             df_inv_limpio['precio'] = pd.to_numeric(df_inv_limpio['precio'], errors='coerce').fillna(0.0)
             df_inv_limpio['stock_minimo'] = pd.to_numeric(df_inv_limpio['stock_minimo'], errors='coerce').fillna(0).astype(int)
@@ -256,4 +266,4 @@ if st.button("💾 Guardar y Actualizar Inventario"):
                 st.success("✅ Inventario en la nube actualizado.")
                 st.rerun()
             except Exception as e:
-                st.error(f"❌ Error al guardar inventario: {e}")
+                st.error(f"❌ Error al guardar inventario: {e}")                

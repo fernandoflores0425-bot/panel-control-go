@@ -310,4 +310,4 @@ with tab4:
                 else:
                     st.success("✅ Tu inventario principal está sano.")
             else:
-                st.info("ℹ️ Define el Stock Mínimo y Stock Ideal en la tabla superior para activar las alertas de reposición.")   
+                st.info("ℹ️ Define el Stock Mínimo y Stock Ideal en la tabla superior para activar las alertas de reposición.")

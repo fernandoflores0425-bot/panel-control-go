@@ -276,25 +276,33 @@ with tab4:
             st.success("✅ Maestro de inventario actualizado correctamente.")
             st.rerun()
         except Exception as e:
-            # Si vuelve a ocurrir un error, ahora el sistema te mostrará exactamente qué lo causó sin colapsar
             st.error(f"❌ Error al guardar. Revisa que no haya datos inválidos. Detalle técnico: {e}")
 
+    # --- PANEL DE REPOSICIÓN INTELIGENTE ---
     st.markdown("---")
     st.subheader("🛒 Panel de Compras (Reposición)")
     
     if not df_inv.empty:
-        df_critico = df_inv[df_inv['stock_actual'] <= df_inv['stock_minimo']].copy()
+        # FILTRO INTELIGENTE: Ignorar productos de prueba (Deben tener Mínimo y Máximo/Ideal > 0)
+        df_real = df_inv[(df_inv['stock_minimo'] > 0) & (df_inv['stock_ideal'] > 0)].copy()
         
-        if not df_critico.empty:
-            df_critico['A Comprar'] = df_critico['stock_ideal'] - df_critico['stock_actual']
-            df_critico['A Comprar'] = df_critico['A Comprar'].apply(lambda x: x if x > 0 else 0)
+        if not df_real.empty:
+            # Lógica Logística: Solo evaluamos los productos reales que tocaron su stock mínimo
+            df_critico = df_real[df_real['stock_actual'] <= df_real['stock_minimo']].copy()
             
-            st.error(f"⚠️ Tienes {len(df_critico)} productos en nivel crítico (Igual o menor al Stock Mínimo).")
-            
-            st.dataframe(
-                df_critico[['sku', 'nombre', 'stock_actual', 'stock_minimo', 'stock_ideal', 'A Comprar']],
-                use_container_width=True,
-                hide_index=True
-            )
+            if not df_critico.empty:
+                # Cálculo exacto a pedir
+                df_critico['A Comprar'] = df_critico['stock_ideal'] - df_critico['stock_actual']
+                df_critico['A Comprar'] = df_critico['A Comprar'].apply(lambda x: x if x > 0 else 0)
+                
+                st.error(f"⚠️ Tienes {len(df_critico)} productos oficiales en nivel crítico (Igual o menor al Stock Mínimo).")
+                
+                st.dataframe(
+                    df_critico[['sku', 'nombre', 'stock_actual', 'stock_minimo', 'stock_ideal', 'A Comprar']],
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.success("✅ Tu inventario principal está sano. Ningún producto oficial ha tocado su nivel de alerta mínima.")
         else:
-            st.success("✅ Tu inventario está sano. Ningún producto ha tocado su nivel de alerta mínima.")
+            st.info("ℹ️ Aún no has definido el Stock Mínimo y Stock Ideal de tus productos. Agrégalos en la tabla superior para activar las alertas de compra automáticas.")

@@ -17,20 +17,25 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN BLINDADA A LA NUBE ---
+# --- 2. CONEXIÓN BLINDADA A LA NUBE (CON DIAGNÓSTICO) ---
 @st.cache_resource
 def init_connection():
     try:
-        # El .strip() elimina espacios en blanco accidentales al copiar/pegar
         url = st.secrets["SUPABASE_URL"].strip()
         key = st.secrets["SUPABASE_KEY"].strip()
+        
+        # 🚨 PANEL DE DIAGNÓSTICO EN PANTALLA 🚨
+        st.warning("🔍 MODO DIAGNÓSTICO ACTIVADO:")
+        st.write(f"🌐 URL leída: `{url}`")
+        st.write(f"🔑 Longitud de la Llave: `{len(key)}` caracteres.")
+        st.write(f"✂️ La llave empieza con: `{key[:10]}` y termina con `{key[-10:]}`")
+        
         return create_client(url, key)
     except Exception as e:
-        st.error(f"❌ Error en las credenciales (Secrets). Revisa que estén bien escritas. Detalle: {e}")
+        st.error(f"❌ Error leyendo los Secrets: {e}")
         st.stop()
 
 supabase = init_connection()
-
 # --- 3. VARIABLES GLOBALES ---
 opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "GOATE"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]

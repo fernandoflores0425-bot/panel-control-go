@@ -170,7 +170,8 @@ with tab1:
 with tab2:
     st.header("Torre de Control de Despachos")
     
-    response_fechas = supabase.table("pedidos").select("fecha_entrega").not_.in_("estado", ["ENTREGADO", "ANULADO", "DEVOLUCION"]).execute()
+    # REPARACIÓN 1: Reemplazo de .not_.in_ por .neq() encadenados
+    response_fechas = supabase.table("pedidos").select("fecha_entrega").neq("estado", "ENTREGADO").neq("estado", "ANULADO").neq("estado", "DEVOLUCION").execute()
     lista_fechas = sorted(list(set([str(item['fecha_entrega']) for item in response_fechas.data if item['fecha_entrega'] and item['fecha_entrega'] != "None"])))
     
     if not lista_fechas:
@@ -186,7 +187,8 @@ with tab2:
             with columnas[i % 2]:
                 st.subheader(f"🚚 {medio}")
                 
-                response_medios = supabase.table("pedidos").select("id_pedido, nombre, celular, distrito, monto, producto, business, estado").eq("medio", medio).or_(f"fecha_entrega.eq.{fecha_filtro},estado.eq.REAGENDADO").not_.in_("estado", ["ENTREGADO", "ANULADO", "DEVOLUCION"]).execute()
+                # REPARACIÓN 2: Reemplazo de .not_.in_ por .neq() encadenados
+                response_medios = supabase.table("pedidos").select("id_pedido, nombre, celular, distrito, monto, producto, business, estado").eq("medio", medio).or_(f"fecha_entrega.eq.{fecha_filtro},estado.eq.REAGENDADO").neq("estado", "ENTREGADO").neq("estado", "ANULADO").neq("estado", "DEVOLUCION").execute()
                 df_medio = pd.DataFrame(response_medios.data)
                 
                 if not df_medio.empty:
@@ -209,7 +211,7 @@ with tab2:
                             st.rerun()
                 else:
                     st.info("Ruta limpia.")
-
+                    
 # --- PESTAÑA 3: BUSCAR Y EDITAR ---
 with tab3:
     st.header("✏️ Buscador y Edición de Pedidos")

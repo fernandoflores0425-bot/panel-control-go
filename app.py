@@ -257,15 +257,27 @@ with tab4:
     if st.button("💾 Guardar y Actualizar Inventario"):
         df_inv_limpio = df_inv_editado.dropna(subset=['sku', 'nombre'], how='any').copy()
         
+        # 1. LIMPIEZA INTELIGENTE: Quitar espacios en blanco de los SKUs
+        df_inv_limpio['sku'] = df_inv_limpio['sku'].astype(str).str.strip()
+        
+        # 2. FILTRO ANTI-DUPLICADOS: Si hay dos SKUs iguales, nos quedamos con el último
+        if df_inv_limpio.duplicated(subset=['sku']).any():
+            st.warning("⚠️ Se detectaron SKUs duplicados. El sistema unificó los repetidos automáticamente.")
+            df_inv_limpio = df_inv_limpio.drop_duplicates(subset=['sku'], keep='last')
+
         df_inv_limpio['stock_actual'] = pd.to_numeric(df_inv_limpio['stock_actual'], errors='coerce').fillna(0).astype(int)
         df_inv_limpio['stock_minimo'] = pd.to_numeric(df_inv_limpio['stock_minimo'], errors='coerce').fillna(0).astype(int)
         df_inv_limpio['stock_ideal'] = pd.to_numeric(df_inv_limpio['stock_ideal'], errors='coerce').fillna(0).astype(int)
         
-        with sqlite3.connect('control_go_v5.db') as conn:
-            conn.execute("DELETE FROM inventario")
-            df_inv_limpio.to_sql('inventario', conn, if_exists='append', index=False)
-        st.success("✅ Maestro de inventario actualizado correctamente.")
-        st.rerun()
+        try:
+            with sqlite3.connect('control_go_v5.db') as conn:
+                conn.execute("DELETE FROM inventario")
+                df_inv_limpio.to_sql('inventario', conn, if_exists='append', index=False)
+            st.success("✅ Maestro de inventario actualizado correctamente.")
+            st.rerun()
+        except Exception as e:
+            # Si vuelve a ocurrir un error, ahora el sistema te mostrará exactamente qué lo causó sin colapsar
+            st.error(f"❌ Error al guardar. Revisa que no haya datos inválidos. Detalle técnico: {e}")
 
     st.markdown("---")
     st.subheader("🛒 Panel de Compras (Reposición)")

@@ -18,12 +18,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Lista global de opciones (para usarse en ambas pestañas)
 opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 opciones_estado = ["POR ARMAR", "ARMADO", "ENTREGADO", "ANULADO", "DEVOLUCION", "REAGENDADO"]
 
-# 1. MOTOR DE BASE DE DATOS (VERSIÓN 4)
+# 1. MOTOR DE BASE DE DATOS
 def inicializar_bd():
     with sqlite3.connect('control_go_v4.db') as conn:
         cursor = conn.cursor()
@@ -57,7 +56,6 @@ with tab1:
     st.header("Ingreso de ventas")
     st.write("Copia y pega desde tu Excel. Observaciones al final.")
     
-    # Agregado "observaciones" al final
     df_base = pd.DataFrame(columns=[
         "id_pedido", "fecha_pedido", "fecha_entrega", "nombre", "celular", 
         "distrito", "medio", "monto", "direccion", "producto", "business", "observaciones"
@@ -84,11 +82,15 @@ with tab1:
     )
     
     if st.button("Registrar Pedidos"):
-        df_limpio = df_editado.dropna(subset=['id_pedido'], how='any')
+        df_limpio = df_editado.dropna(subset=['id_pedido'], how='any').copy()
         
         if not df_limpio.empty:
             try:
-                # El estado inicial ahora es "POR ARMAR"
+                # Limpieza automatizada de espacios en blanco invisibles de Excel
+                for col in df_limpio.columns:
+                    if df_limpio[col].dtype == 'object':
+                        df_limpio[col] = df_limpio[col].astype(str).str.strip()
+                        
                 df_limpio['estado'] = 'POR ARMAR'
                 with sqlite3.connect('control_go_v4.db') as conn:
                     df_limpio.to_sql('pedidos', conn, if_exists='append', index=False)
@@ -98,15 +100,23 @@ with tab1:
         else:
             st.warning("⚠️ Rellena al menos el campo de ID antes de guardar.")
 
-# --- PESTAÑA 2: RUTAS Y DESPACHOS (VISIÓN 2x2) ---
+# --- PESTAÑA 2: RUTAS Y DESPACHOS ---
 with tab2:
     st.header("Torre de Control de Despachos")
     
-    # Selector de fecha (Por defecto: la fecha de hoy en formato DD/MM/YYYY)
-    fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
-    fecha_filtro = st.text_input("📅 Fecha de ruta a procesar (DD/MM/YYYY):", value=fecha_hoy)
+    # Extraer fechas disponibles de la base de datos para el desplegable
+    with sqlite3.connect('control_go_v4.db') as conn:
+        fechas_df = pd.read_sql_query("SELECT DISTINCT fecha_entrega FROM pedidos WHERE estado NOT IN ('ENTREGADO', 'ANULADO', 'DEVOLUCION') AND fecha_entrega IS NOT NULL", conn)
     
-    # Multiselector para elegir los paneles a visualizar
+    # Limpiar y ordenar la lista de fechas
+    lista_fechas = [f.strip() for f in fechas_df['fecha_entrega'].astype(str).tolist() if f.strip() != "nan" and f.strip() != "None" and f.strip() != ""]
+    
+    if not lista_fechas:
+        lista_fechas = [datetime.datetime.now().strftime("%d/%m/%Y")]
+        st.info("No se detectaron fechas agendadas pendientes.")
+        
+    fecha_filtro = st.selectbox("📅 Selecciona la fecha de ruta a procesar:", options=lista_fechas)
+    
     medios_seleccionados = st.multiselect(
         "Selecciona hasta 4 Courier/Medios para visualizar:", 
         options=opciones_medio, 
@@ -117,17 +127,14 @@ with tab2:
     st.markdown("---")
     
     if medios_seleccionados:
-        # Crea la cuadrícula de 2 columnas (para el efecto 2 arriba, 2 abajo)
         columnas = st.columns(2)
         
         for i, medio in enumerate(medios_seleccionados):
-            # i % 2 distribuye alternadamente: panel 1 a la izq, panel 2 a la der, panel 3 a la izq...
             with columnas[i % 2]:
                 st.subheader(f"🚚 {medio}")
                 
                 with sqlite3.connect('control_go_v4.db') as conn:
-                    # Lógica estricta: Mostrar si es la fecha seleccionada O si está REAGENDADO. 
-                    # NUNCA mostrar si ya se entregó, anuló o devolvió.
+                    # Filtro exacto por el medio y la fecha seleccionada en el desplegable
                     query = """
                     SELECT id_pedido, nombre, celular, distrito, monto, producto, business, estado 
                     FROM pedidos 
@@ -138,11 +145,9 @@ with tab2:
                     df_medio = pd.read_sql_query(query, conn, params=(medio, fecha_filtro))
                 
                 if not df_medio.empty:
-                    # Tabla editable directo en pantalla
                     df_rutas = st.data_editor(
                         df_medio,
                         key=f"editor_{medio}",
-                        # Bloqueamos todas las celdas para que no las borren por error, EXCEPTO el 'estado'
                         disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "producto", "business"],
                         column_config={
                             "estado": st.column_config.SelectboxColumn(
@@ -155,12 +160,10 @@ with tab2:
                         hide_index=True
                     )
                     
-                    # Botón individual para guardar cada cuadrícula
                     if st.button(f"Guardar Cambios - {medio}", key=f"btn_{medio}"):
                         with sqlite3.connect('control_go_v4.db') as conn:
                             cambios = 0
                             for index, row in df_rutas.iterrows():
-                                # Solo impacta la base de datos si cambiaste algo en el menú desplegable
                                 if row['estado'] != df_medio.loc[index, 'estado']:
                                     conn.execute("UPDATE pedidos SET estado = ? WHERE id_pedido = ?", (row['estado'], row['id_pedido']))
                                     cambios += 1
@@ -168,13 +171,13 @@ with tab2:
                             if cambios > 0:
                                 conn.commit()
                                 st.success(f"✅ Se actualizaron {cambios} estados en {medio}.")
-                                st.rerun() # Refresca para limpiar de la pantalla los que ya se entregaron
+                                st.rerun() 
                             else:
                                 st.info("No detecté cambios.")
                 else:
                     st.info(f"Ruta limpia. No hay paquetes pendientes para {medio} hoy.")
                 
-                st.write("") # Espaciador inferior
+                st.write("") 
                 st.write("")
     else:
         st.warning("Selecciona al menos un medio de envío para ver sus rutas.")

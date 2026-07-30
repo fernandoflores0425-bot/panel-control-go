@@ -236,32 +236,18 @@ with tab3:
         else:
             st.info("No hay pedidos para editar.")
 
-# --- PESTAÑA 4: INVENTARIO ---
-with tab4:
-    st.header("📊 Maestro de Inventario y Alertas")
-    datos_inv_full = descargar_datos_seguros("inventario")
-    
-    if datos_inv_full is not None:
-        df_inv = pd.DataFrame(datos_inv_full)
-        if df_inv.empty:
-            df_inv = pd.DataFrame(index=range(10), columns=["nombre", "sku", "stock_actual", "precio", "stock_minimo", "stock_ideal"])
-        
-        df_inv_editado = st.data_editor(
-            df_inv, num_rows="dynamic",
-            column_config={
-                "nombre": st.column_config.TextColumn("Nombre", required=True),
-                "sku": st.column_config.TextColumn("SKU", required=True),
-                "stock_actual": st.column_config.NumberColumn("Stock", min_value=0, step=1, required=True),
-            }, use_container_width=True, height=400
-        )
-        
-        if st.button("💾 Guardar y Actualizar Inventario"):
+if st.button("💾 Guardar y Actualizar Inventario"):
             df_inv_limpio = df_inv_editado.dropna(subset=['sku', 'nombre'], how='any').copy()
             df_inv_limpio['sku'] = df_inv_limpio['sku'].astype(str).str.strip()
             if df_inv_limpio.duplicated(subset=['sku']).any():
                 df_inv_limpio = df_inv_limpio.drop_duplicates(subset=['sku'], keep='last')
             
-            df_inv_limpio = df_inv_limpio.fillna(0)
+            # --- POKA-YOKE: Limpieza estricta de datos (como en Power Query) ---
+            # Forzamos todo a número, si hay un vacío o texto raro, lo vuelve 0
+            df_inv_limpio['stock_actual'] = pd.to_numeric(df_inv_limpio['stock_actual'], errors='coerce').fillna(0).astype(int)
+            df_inv_limpio['precio'] = pd.to_numeric(df_inv_limpio['precio'], errors='coerce').fillna(0.0)
+            df_inv_limpio['stock_minimo'] = pd.to_numeric(df_inv_limpio['stock_minimo'], errors='coerce').fillna(0).astype(int)
+            df_inv_limpio['stock_ideal'] = pd.to_numeric(df_inv_limpio['stock_ideal'], errors='coerce').fillna(0).astype(int)
             
             try:
                 supabase.table("inventario").delete().neq("sku", "BORRAR_TODO").execute()

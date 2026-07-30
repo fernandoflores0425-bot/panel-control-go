@@ -99,6 +99,7 @@ with tab1:
             inventario_db = {item['sku']: item for item in datos_inv}
             error_bloqueante = False
             operaciones_descuento = []
+            alertas_stock = [] # <-- RECUPERADO: Lista para guardar las alertas
             
             for index, row in df_limpio.iterrows():
                 articulos_pedidos = decodificar_productos(row['producto'])
@@ -109,8 +110,17 @@ with tab1:
                         break
                     else:
                         item_inv = inventario_db[art['sku']]
-                        nuevo_stock = item_inv['stock_actual'] - art['cant']
+                        stock_actual = item_inv['stock_actual']
+                        stock_minimo = item_inv.get('stock_minimo', 0)
+                        nuevo_stock = stock_actual - art['cant']
+                        
                         operaciones_descuento.append({'sku': art['sku'], 'nuevo_stock': nuevo_stock})
+                        
+                        # <-- RECUPERADO: Lógica de avisos
+                        if nuevo_stock < 0:
+                            alertas_stock.append(f"⚠️ Atención: '{art['sku']}' quedó con stock negativo ({nuevo_stock}).")
+                        elif nuevo_stock <= stock_minimo:
+                            alertas_stock.append(f"🔔 Alerta: '{art['sku']}' llegó a su límite. Quedan {nuevo_stock} unidades.")
             
             if not error_bloqueante:
                 datos_pedidos = descargar_datos_seguros("pedidos")
@@ -146,6 +156,11 @@ with tab1:
                     for op in operaciones_descuento:
                         supabase.table("inventario").update({"stock_actual": op['nuevo_stock']}).eq("sku", op['sku']).execute()
                     st.success(f"✅ ¡{len(nuevos_registros)} pedidos registrados en la nube!")
+                    
+                    # <-- RECUPERADO: Mostrar alertas en pantalla después de guardar
+                    for alerta in set(alertas_stock):
+                        st.warning(alerta)
+                        
                 except Exception as e:
                     st.error(f"❌ Error al guardar en la nube: {e}")
         else:
@@ -266,4 +281,33 @@ with tab4:
                 st.success("✅ Inventario en la nube actualizado.")
                 st.rerun()
             except Exception as e:
-                st.error(f"❌ Error al guardar inventario: {e}")                
+                st.error(f"❌ Error al guardar inventario: {e}")
+                
+        # --- RECUPERADO: Panel de Compras (Reposición) ---
+        st.markdown("---")
+        st.subheader("🛒 Panel de Compras (Reposición)")
+        
+        if not df_inv.empty and 'stock_minimo' in df_inv.columns:
+            df_inv['stock_minimo'] = pd.to_numeric(df_inv['stock_minimo'], errors='coerce').fillna(0)
+            df_inv['stock_ideal'] = pd.to_numeric(df_inv['stock_ideal'], errors='coerce').fillna(0)
+            df_inv['stock_actual'] = pd.to_numeric(df_inv['stock_actual'], errors='coerce').fillna(0)
+            
+            df_real = df_inv[(df_inv['stock_minimo'] > 0) & (df_inv['stock_ideal'] > 0)].copy()
+            
+            if not df_real.empty:
+                df_critico = df_real[df_real['stock_actual'] <= df_real['stock_minimo']].copy()
+                
+                if not df_critico.empty:
+                    df_critico['A Comprar'] = df_critico['stock_ideal'] - df_critico['stock_actual']
+                    df_critico['A Comprar'] = df_critico['A Comprar'].apply(lambda x: x if x > 0 else 0)
+                    
+                    st.error(f"⚠️ Tienes {len(df_critico)} productos en nivel crítico.")
+                    st.dataframe(
+                        df_critico[['sku', 'nombre', 'stock_actual', 'stock_minimo', 'stock_ideal', 'A Comprar']],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.success("✅ Tu inventario principal está sano.")
+            else:
+                st.info("ℹ️ Define el Stock Mínimo y Stock Ideal en la tabla superior para activar las alertas de reposición.")   

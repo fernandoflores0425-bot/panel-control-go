@@ -18,7 +18,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB"]
+# AQUÍ ESTÁ EL CAMBIO: Se agregó "GOATE" al final de esta lista
+opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "GOATE"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 opciones_estado = ["POR ARMAR", "ARMADO", "ENTREGADO", "ANULADO", "DEVOLUCION", "REAGENDADO"]
 
@@ -56,7 +57,6 @@ with tab1:
     st.header("Ingreso de ventas")
     st.write("Copia de tu Excel y pega directo en la primera celda. Los IDs se generarán automáticamente.")
     
-    # Creamos un lienzo con 15 filas vacías pre-creadas para facilitar el pegado masivo
     df_base = pd.DataFrame(index=range(15), columns=[
         "fecha_pedido", "fecha_entrega", "nombre", "celular", 
         "distrito", "medio", "monto", "direccion", "producto", "business", "observaciones"
@@ -82,20 +82,16 @@ with tab1:
     )
     
     if st.button("Registrar Pedidos"):
-        # Limpiamos las filas que el usuario dejó vacías (exigimos que al menos haya un nombre y producto)
         df_limpio = df_editado.dropna(subset=['nombre', 'producto'], how='any').copy()
         
         if not df_limpio.empty:
             try:
-                # Limpieza de espacios en blanco
                 for col in df_limpio.columns:
                     if df_limpio[col].dtype == 'object':
                         df_limpio[col] = df_limpio[col].astype(str).str.strip()
                 
-                # MOTOR DE AUTO-ID
                 with sqlite3.connect('control_go_v4.db') as conn:
                     cursor = conn.cursor()
-                    # Buscar el último ID registrado para saber dónde continuar
                     cursor.execute("SELECT id_pedido FROM pedidos ORDER BY ROWID DESC LIMIT 1")
                     ultimo_registro = cursor.fetchone()
                     
@@ -105,19 +101,16 @@ with tab1:
                         except ValueError:
                             ultimo_numero = 1000
                     else:
-                        ultimo_numero = 1000 # El sistema empieza en CG-1001
+                        ultimo_numero = 1000 
                     
-                    # Generar la lista de nuevos IDs
                     nuevos_ids = []
                     for i in range(len(df_limpio)):
                         ultimo_numero += 1
                         nuevos_ids.append(f"CG-{ultimo_numero}")
                     
-                    # Insertar los IDs como la primera columna de los datos
                     df_limpio.insert(0, 'id_pedido', nuevos_ids)
                     df_limpio['estado'] = 'POR ARMAR'
                     
-                    # Guardar en base de datos
                     df_limpio.to_sql('pedidos', conn, if_exists='append', index=False)
                 st.success(f"✅ ¡{len(df_limpio)} pedidos agendados exitosamente! Se generaron los códigos desde {nuevos_ids[0]} hasta {nuevos_ids[-1]}.")
             except Exception as e:

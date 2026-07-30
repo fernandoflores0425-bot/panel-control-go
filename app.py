@@ -1,7 +1,7 @@
-import sqlite3
-import pandas as pd
 import streamlit as st
+import pandas as pd
 import datetime
+from supabase import create_client, Client
 
 # Configuración visual de la página
 st.set_page_config(page_title="Control Go - Operaciones", layout="wide")
@@ -18,42 +18,20 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# Conexión segura a Supabase usando los secretos de Streamlit
+@st.cache_resource
+def init_connection() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+supabase = init_connection()
+
 opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "GOATE"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 opciones_estado = ["POR ARMAR", "ARMADO", "ENTREGADO", "ANULADO", "DEVOLUCION", "REAGENDADO"]
 
-# 1. MOTOR DE BASE DE DATOS
-def inicializar_bd():
-    with sqlite3.connect('control_go_v5.db') as conn:
-        cursor = conn.cursor()
-        cursor.execute('''CREATE TABLE IF NOT EXISTS inventario (
-            sku TEXT PRIMARY KEY, 
-            nombre TEXT, 
-            stock_actual INTEGER, 
-            precio REAL,
-            stock_minimo INTEGER,
-            stock_ideal INTEGER
-        )''')
-        cursor.execute('''CREATE TABLE IF NOT EXISTS pedidos (
-            id_pedido TEXT PRIMARY KEY, 
-            fecha_pedido TEXT, 
-            fecha_entrega TEXT, 
-            nombre TEXT, 
-            celular TEXT, 
-            distrito TEXT,
-            medio TEXT, 
-            monto REAL, 
-            direccion TEXT, 
-            producto TEXT, 
-            business TEXT,
-            observaciones TEXT, 
-            estado TEXT DEFAULT 'POR ARMAR'
-        )''')
-        conn.commit()
-
-inicializar_bd()
-
-# MOTOR DE LECTURA (ACTUALIZADO PARA IGNORAR "PLS")
+# Función para traducir el texto "1 SKU1 + 3 SKU2"
 def decodificar_productos(producto_str):
     articulos = []
     if not producto_str or pd.isna(producto_str): return articulos
@@ -61,21 +39,12 @@ def decodificar_productos(producto_str):
     partes = str(producto_str).split('+')
     for p in partes:
         p = p.strip()
-        if not p: 
-            continue
-            
-        # Filtro 1: Si escriben exactamente "PLS" o "pls"
-        if p.upper() == 'PLS':
-            continue
+        if not p or p.upper() == 'PLS': continue
             
         if ' ' in p:
             cant_str, sku = p.split(' ', 1)
             sku = sku.strip()
-            
-            # Filtro 2: Si escriben cantidad antes de las pilas, ej: "2 PLS"
-            if sku.upper() == 'PLS':
-                continue
-                
+            if sku.upper() == 'PLS': continue
             try:
                 articulos.append({'sku': sku, 'cant': int(cant_str)})
             except ValueError:
@@ -84,7 +53,6 @@ def decodificar_productos(producto_str):
             articulos.append({'sku': p, 'cant': 1})
     return articulos
 
-# 2. INTERFAZ VISUAL
 st.title("📦 Panel de Control Operativo")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas por Día", "✏️ Editar Pedidos", "📊 Maestro de Inventario"])
@@ -92,7 +60,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas por Día",
 # --- PESTAÑA 1: AGENDAR ---
 with tab1:
     st.header("Ingreso de ventas")
-    st.write("El sistema verificará los SKUs. Usa el formato '1 SKU1 + 3 SKU2 + PLS'. Las pilas (PLS) se ignorarán automáticamente.")
+    st.write("Copia de tu Excel y pega directo en la primera celda. Los IDs se generarán automáticamente en la nube.")
     
     df_base = pd.DataFrame(index=range(15), columns=[
         "fecha_pedido", "fecha_entrega", "nombre", "celular", 
@@ -126,64 +94,88 @@ with tab1:
             alertas_stock = []
             operaciones_descuento = []
             
-            with sqlite3.connect('control_go_v5.db') as conn:
-                cursor = conn.cursor()
-                
-                for index, row in df_limpio.iterrows():
-                    articulos_pedidos = decodificar_productos(row['producto'])
-                    
-                    for art in articulos_pedidos:
-                        cursor.execute("SELECT stock_actual, stock_minimo FROM inventario WHERE sku = ?", (art['sku'],))
-                        resultado = cursor.fetchone()
+            # Obtener inventario actual de Supabase
+            response_inv = supabase.table("inventario").select("*").execute()
+            inventario_db = {item['sku']: item for item in response_inv.data}
+            
+            for index, row in df_limpio.iterrows():
+                articulos_pedidos = decodificar_productos(row['producto'])
+                for art in articulos_pedidos:
+                    if art['sku'] not in inventario_db:
+                        st.error(f"❌ ERROR: El producto '{art['sku']}' (Pedido de {row['nombre']}) NO existe en el Inventario Maestro.")
+                        error_bloqueante = True
+                        break
+                    else:
+                        item_inv = inventario_db[art['sku']]
+                        stock_actual = item_inv['stock_actual']
+                        stock_minimo = item_inv['stock_minimo']
+                        nuevo_stock = stock_actual - art['cant']
                         
-                        if not resultado:
-                            st.error(f"❌ ERROR: El producto '{art['sku']}' (Pedido de {row['nombre']}) NO existe en el Inventario Maestro. Agéndalo primero en la Pestaña 4.")
-                            error_bloqueante = True
-                            break
-                        else:
-                            stock_actual, stock_minimo = resultado
-                            nuevo_stock = stock_actual - art['cant']
-                            operaciones_descuento.append({'sku': art['sku'], 'nuevo_stock': nuevo_stock})
-                            
-                            if nuevo_stock < 0:
-                                alertas_stock.append(f"⚠️ Atención: '{art['sku']}' quedó con stock negativo ({nuevo_stock}).")
-                            elif nuevo_stock <= stock_minimo:
-                                alertas_stock.append(f"🔔 Alerta: '{art['sku']}' llegó a su Stock Mínimo. Quedan {nuevo_stock} unidades.")
+                        operaciones_descuento.append({'sku': art['sku'], 'nuevo_stock': nuevo_stock})
+                        
+                        if nuevo_stock < 0:
+                            alertas_stock.append(f"⚠️ Atención: '{art['sku']}' quedó con stock negativo ({nuevo_stock}).")
+                        elif nuevo_stock <= stock_minimo:
+                            alertas_stock.append(f"🔔 Alerta: '{art['sku']}' llegó a su Stock Mínimo. Quedan {nuevo_stock} unidades.")
+            
+            if not error_bloqueante:
+                # Obtener último ID de pedido registrado para autoincrementar
+                response_pedidos = supabase.table("pedidos").select("id_pedido").order("id_pedido", desc=True).limit(1).execute()
+                ultimo_id = response_pedidos.data
                 
-                if not error_bloqueante:
-                    cursor.execute("SELECT id_pedido FROM pedidos ORDER BY ROWID DESC LIMIT 1")
-                    ultimo_registro = cursor.fetchone()
-                    ultimo_numero = int(ultimo_registro[0].split("-")[1]) if (ultimo_registro and ultimo_registro[0].startswith("CG-")) else 1000
+                if ultimo_id and ultimo_id[0]['id_pedido'].startswith("CG-"):
+                    try:
+                        ultimo_numero = int(ultimo_id[0]['id_pedido'].split("-")[1])
+                    except ValueError:
+                        ultimo_numero = 1000
+                else:
+                    ultimo_numero = 1000
+                
+                nuevos_registros = []
+                for _, row in df_limpio.iterrows():
+                    ultimo_numero += 1
+                    nuevo_id = f"CG-{ultimo_numero}"
                     
-                    nuevos_ids = []
-                    for _ in range(len(df_limpio)):
-                        ultimo_numero += 1
-                        nuevos_ids.append(f"CG-{ultimo_numero}")
-                    
-                    df_limpio.insert(0, 'id_pedido', nuevos_ids)
-                    df_limpio['estado'] = 'POR ARMAR'
-                    
-                    df_limpio.to_sql('pedidos', conn, if_exists='append', index=False)
-                    
-                    for op in operaciones_descuento:
-                        cursor.execute("UPDATE inventario SET stock_actual = ? WHERE sku = ?", (op['nuevo_stock'], op['sku']))
-                    
-                    conn.commit()
-                    st.success("✅ Pedidos registrados y stock descontado con éxito.")
-                    
-                    for alerta in set(alertas_stock): 
-                        st.warning(alerta)
+                    registro = {
+                        "id_pedido": nuevo_id,
+                        "fecha_pedido": str(row['fecha_pedido']),
+                        "fecha_entrega": str(row['fecha_entrega']),
+                        "nombre": str(row['nombre']),
+                        "celular": str(row['celular']),
+                        "distrito": str(row['distrito']),
+                        "medio": str(row['medio']),
+                        "monto": float(row['monto']) if pd.notna(row['monto']) else 0.0,
+                        "direccion": str(row['direccion']),
+                        "producto": str(row['producto']),
+                        "business": str(row['business']),
+                        "observaciones": str(row['observaciones']) if pd.notna(row['observaciones']) else "",
+                        "estado": "POR ARMAR"
+                    }
+                    nuevos_registros.append(registro)
+                
+                # Insertar pedidos en Supabase
+                supabase.table("pedidos").insert(nuevos_registros).execute()
+                
+                # Actualizar stock en Supabase
+                for op in operaciones_descuento:
+                    supabase.table("inventario").update({"stock_actual": op['nuevo_stock']}).eq("sku", op['sku']).execute()
+                
+                st.success(f"✅ ¡{len(nuevos_registros)} pedidos registrados con éxito en la nube!")
+                for alerta in set(alertas_stock):
+                    st.warning(alerta)
         else:
             st.warning("⚠️ La tabla está vacía.")
 
 # --- PESTAÑA 2: RUTAS Y DESPACHOS ---
 with tab2:
     st.header("Torre de Control de Despachos")
-    with sqlite3.connect('control_go_v5.db') as conn:
-        fechas_df = pd.read_sql_query("SELECT DISTINCT fecha_entrega FROM pedidos WHERE estado NOT IN ('ENTREGADO', 'ANULADO', 'DEVOLUCION') AND fecha_entrega IS NOT NULL", conn)
     
-    lista_fechas = [f.strip() for f in fechas_df['fecha_entrega'].astype(str).tolist() if f.strip() != "nan" and f.strip() != "None" and f.strip() != ""]
-    if not lista_fechas: lista_fechas = [datetime.datetime.now().strftime("%d/%m/%Y")]
+    response_fechas = supabase.table("pedidos").select("fecha_entrega").not_.in_("estado", ["ENTREGADO", "ANULADO", "DEVOLUCION"]).execute()
+    lista_fechas = sorted(list(set([str(item['fecha_entrega']) for item in response_fechas.data if item['fecha_entrega'] and item['fecha_entrega'] != "None"])))
+    
+    if not lista_fechas:
+        lista_fechas = [datetime.datetime.now().strftime("%d/%m/%Y")]
+        st.info("No se detectaron fechas agendadas pendientes.")
         
     fecha_filtro = st.selectbox("📅 Selecciona la fecha de ruta a procesar:", options=lista_fechas)
     medios_seleccionados = st.multiselect("Courier:", options=opciones_medio, default=["MD", "ENTRE GO", "URB", "PROV"], max_selections=4)
@@ -193,18 +185,28 @@ with tab2:
         for i, medio in enumerate(medios_seleccionados):
             with columnas[i % 2]:
                 st.subheader(f"🚚 {medio}")
-                with sqlite3.connect('control_go_v5.db') as conn:
-                    df_medio = pd.read_sql_query("SELECT id_pedido, nombre, celular, distrito, monto, producto, business, estado FROM pedidos WHERE medio = ? AND (fecha_entrega = ? OR estado = 'REAGENDADO') AND estado NOT IN ('ENTREGADO', 'ANULADO', 'DEVOLUCION')", conn, params=(medio, fecha_filtro))
+                
+                response_medios = supabase.table("pedidos").select("id_pedido, nombre, celular, distrito, monto, producto, business, estado").eq("medio", medio).or_(f"fecha_entrega.eq.{fecha_filtro},estado.eq.REAGENDADO").not_.in_("estado", ["ENTREGADO", "ANULADO", "DEVOLUCION"]).execute()
+                df_medio = pd.DataFrame(response_medios.data)
                 
                 if not df_medio.empty:
-                    df_rutas = st.data_editor(df_medio, key=f"editor_{medio}", disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "producto", "business"], column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado, required=True)}, use_container_width=True, hide_index=True)
+                    df_rutas = st.data_editor(
+                        df_medio, 
+                        key=f"editor_{medio}", 
+                        disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "producto", "business"], 
+                        column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado, required=True)}, 
+                        use_container_width=True, 
+                        hide_index=True
+                    )
                     if st.button(f"Guardar Cambios - {medio}", key=f"btn_{medio}"):
-                        with sqlite3.connect('control_go_v5.db') as conn:
-                            for index, row in df_rutas.iterrows():
-                                if row['estado'] != df_medio.loc[index, 'estado']:
-                                    conn.execute("UPDATE pedidos SET estado = ? WHERE id_pedido = ?", (row['estado'], row['id_pedido']))
-                            conn.commit()
-                        st.rerun() 
+                        cambios = 0
+                        for index, row in df_rutas.iterrows():
+                            if row['estado'] != df_medio.loc[index, 'estado']:
+                                supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
+                                cambios += 1
+                        if cambios > 0:
+                            st.success(f"✅ Se actualizaron {cambios} estados.")
+                            st.rerun()
                 else:
                     st.info("Ruta limpia.")
 
@@ -212,29 +214,55 @@ with tab2:
 with tab3:
     st.header("✏️ Buscador y Edición de Pedidos")
     busqueda = st.text_input("🔍 Buscar pedido (por ID, Nombre o Celular):")
-    with sqlite3.connect('control_go_v5.db') as conn:
-        if busqueda:
-            df_editar = pd.read_sql_query("SELECT * FROM pedidos WHERE id_pedido LIKE ? OR nombre LIKE ? OR celular LIKE ? ORDER BY ROWID DESC", conn, params=(f"%{busqueda}%", f"%{busqueda}%", f"%{busqueda}%"))
-        else:
-            df_editar = pd.read_sql_query("SELECT * FROM pedidos ORDER BY ROWID DESC LIMIT 20", conn)
-            
+    
+    if busqueda:
+        response_busqueda = supabase.table("pedidos").select("*").or_(f"id_pedido.ilike.%{busqueda}%,nombre.ilike.%{busqueda}%,celular.ilike.%{busqueda}%").limit(20).execute()
+    else:
+        response_busqueda = supabase.table("pedidos").select("*").order("id_pedido", desc=True).limit(20).execute()
+        
+    df_editar = pd.DataFrame(response_busqueda.data)
+    
     if not df_editar.empty:
-        df_editado_global = st.data_editor(df_editar, key="editor_global", use_container_width=True, hide_index=True, disabled=["id_pedido"], column_config={"medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), "business": st.column_config.SelectboxColumn("Business", options=opciones_business), "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado)})
+        df_editado_global = st.data_editor(
+            df_editar, 
+            key="editor_global", 
+            use_container_width=True, 
+            hide_index=True, 
+            disabled=["id_pedido"], 
+            column_config={
+                "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), 
+                "business": st.column_config.SelectboxColumn("Business", options=opciones_business), 
+                "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado)
+            }
+        )
         if st.button("💾 Guardar Ediciones"):
-            with sqlite3.connect('control_go_v5.db') as conn:
-                for index, row in df_editado_global.iterrows():
-                    conn.execute("UPDATE pedidos SET fecha_pedido=?, fecha_entrega=?, nombre=?, celular=?, distrito=?, medio=?, monto=?, direccion=?, producto=?, business=?, observaciones=?, estado=? WHERE id_pedido=?", (row['fecha_pedido'], row['fecha_entrega'], row['nombre'], row['celular'], row['distrito'], row['medio'], row['monto'], row['direccion'], row['producto'], row['business'], row['observaciones'], row['estado'], row['id_pedido']))
-                conn.commit()
+            for _, row in df_editado_global.iterrows():
+                supabase.table("pedidos").update({
+                    "fecha_pedido": str(row['fecha_pedido']),
+                    "fecha_entrega": str(row['fecha_entrega']),
+                    "nombre": str(row['nombre']),
+                    "celular": str(row['celular']),
+                    "distrito": str(row['distrito']),
+                    "medio": str(row['medio']),
+                    "monto": float(row['monto']) if pd.notna(row['monto']) else 0.0,
+                    "direccion": str(row['direccion']),
+                    "producto": str(row['producto']),
+                    "business": str(row['business']),
+                    "observaciones": str(row['observaciones']) if pd.notna(row['observaciones']) else "",
+                    "estado": str(row['estado'])
+                }).eq("id_pedido", row['id_pedido']).execute()
             st.success("✅ Cambios guardados correctamente.")
             st.rerun()
+    else:
+        st.info("No se encontraron pedidos.")
 
 # --- PESTAÑA 4: INVENTARIO (MAESTRO Y REPOSICIÓN) ---
 with tab4:
     st.header("📊 Maestro de Inventario y Alertas")
-    st.write("Pega aquí tu lista maestra. El sistema calculará cuánto debes reponer según tu Stock Ideal.")
+    st.write("Gestiona tu inventario en la nube y revisa el panel de reposición.")
     
-    with sqlite3.connect('control_go_v5.db') as conn:
-        df_inv = pd.read_sql_query("SELECT nombre, sku, stock_actual, precio, stock_minimo, stock_ideal FROM inventario", conn)
+    response_inv_full = supabase.table("inventario").select("*").execute()
+    df_inv = pd.DataFrame(response_inv_full.data)
     
     if df_inv.empty:
         df_inv = pd.DataFrame(index=range(10), columns=["nombre", "sku", "stock_actual", "precio", "stock_minimo", "stock_ideal"])
@@ -256,53 +284,61 @@ with tab4:
     
     if st.button("💾 Guardar y Actualizar Inventario"):
         df_inv_limpio = df_inv_editado.dropna(subset=['sku', 'nombre'], how='any').copy()
-        
-        # 1. LIMPIEZA INTELIGENTE: Quitar espacios en blanco de los SKUs
         df_inv_limpio['sku'] = df_inv_limpio['sku'].astype(str).str.strip()
         
-        # 2. FILTRO ANTI-DUPLICADOS: Si hay dos SKUs iguales, nos quedamos con el último
         if df_inv_limpio.duplicated(subset=['sku']).any():
-            st.warning("⚠️ Se detectaron SKUs duplicados. El sistema unificó los repetidos automáticamente.")
+            st.warning("⚠️ SKUs duplicados unificados automáticamente.")
             df_inv_limpio = df_inv_limpio.drop_duplicates(subset=['sku'], keep='last')
 
         df_inv_limpio['stock_actual'] = pd.to_numeric(df_inv_limpio['stock_actual'], errors='coerce').fillna(0).astype(int)
         df_inv_limpio['stock_minimo'] = pd.to_numeric(df_inv_limpio['stock_minimo'], errors='coerce').fillna(0).astype(int)
         df_inv_limpio['stock_ideal'] = pd.to_numeric(df_inv_limpio['stock_ideal'], errors='coerce').fillna(0).astype(int)
+        df_inv_limpio['precio'] = pd.to_numeric(df_inv_limpio['precio'], errors='coerce').fillna(0.0)
         
         try:
-            with sqlite3.connect('control_go_v5.db') as conn:
-                conn.execute("DELETE FROM inventario")
-                df_inv_limpio.to_sql('inventario', conn, if_exists='append', index=False)
-            st.success("✅ Maestro de inventario actualizado correctamente.")
+            # Reemplazar tabla completa en Supabase de forma limpia
+            supabase.table("inventario").delete().neq("sku", "BORRAR_TODO").execute()
+            
+            registros_inv = []
+            for _, row in df_inv_limpio.iterrows():
+                registros_inv.append({
+                    "sku": str(row['sku']),
+                    "nombre": str(row['nombre']),
+                    "stock_actual": int(row['stock_actual']),
+                    "precio": float(row['precio']),
+                    "stock_minimo": int(row['stock_minimo']),
+                    "stock_ideal": int(row['stock_ideal'])
+                })
+            supabase.table("inventario").insert(registros_inv).execute()
+            st.success("✅ Maestro de inventario actualizado en la nube.")
             st.rerun()
         except Exception as e:
-            st.error(f"❌ Error al guardar. Revisa que no haya datos inválidos. Detalle técnico: {e}")
+            st.error(f"❌ Error al guardar inventario: {e}")
 
-    # --- PANEL DE REPOSICIÓN INTELIGENTE ---
     st.markdown("---")
     st.subheader("🛒 Panel de Compras (Reposición)")
     
-    if not df_inv.empty:
-        # FILTRO INTELIGENTE: Ignorar productos de prueba (Deben tener Mínimo y Máximo/Ideal > 0)
+    if not df_inv.empty and 'stock_minimo' in df_inv.columns:
+        df_inv['stock_minimo'] = pd.to_numeric(df_inv['stock_minimo'], errors='coerce').fillna(0)
+        df_inv['stock_ideal'] = pd.to_numeric(df_inv['stock_ideal'], errors='coerce').fillna(0)
+        df_inv['stock_actual'] = pd.to_numeric(df_inv['stock_actual'], errors='coerce').fillna(0)
+        
         df_real = df_inv[(df_inv['stock_minimo'] > 0) & (df_inv['stock_ideal'] > 0)].copy()
         
         if not df_real.empty:
-            # Lógica Logística: Solo evaluamos los productos reales que tocaron su stock mínimo
             df_critico = df_real[df_real['stock_actual'] <= df_real['stock_minimo']].copy()
             
             if not df_critico.empty:
-                # Cálculo exacto a pedir
                 df_critico['A Comprar'] = df_critico['stock_ideal'] - df_critico['stock_actual']
                 df_critico['A Comprar'] = df_critico['A Comprar'].apply(lambda x: x if x > 0 else 0)
                 
-                st.error(f"⚠️ Tienes {len(df_critico)} productos oficiales en nivel crítico (Igual o menor al Stock Mínimo).")
-                
+                st.error(f"⚠️ Tienes {len(df_critico)} productos oficiales en nivel crítico.")
                 st.dataframe(
                     df_critico[['sku', 'nombre', 'stock_actual', 'stock_minimo', 'stock_ideal', 'A Comprar']],
                     use_container_width=True,
                     hide_index=True
                 )
             else:
-                st.success("✅ Tu inventario principal está sano. Ningún producto oficial ha tocado su nivel de alerta mínima.")
+                st.success("✅ Tu inventario principal está sano.")
         else:
-            st.info("ℹ️ Aún no has definido el Stock Mínimo y Stock Ideal de tus productos. Agrégalos en la tabla superior para activar las alertas de compra automáticas.")
+            st.info("ℹ️ Define el Stock Mínimo y Stock Ideal en la tabla superior para activar las alertas.")

@@ -3,8 +3,13 @@ import pandas as pd
 import datetime
 from supabase import create_client, Client
 
-# --- 1. CONFIGURACIÓN VISUAL ---
+# --- 1. CONFIGURACIÓN VISUAL Y DE MEMORIA ---
 st.set_page_config(page_title="Control Go - Operaciones", layout="wide")
+
+# Inicializador del Poka-yoke de limpieza de tabla
+if 'limpiador_tab1' not in st.session_state:
+    st.session_state['limpiador_tab1'] = 0
+
 st.markdown("""
     <style>
     .stButton>button {
@@ -35,7 +40,6 @@ opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIEN
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 opciones_estado = ["POR ARMAR", "ARMADO", "ENTREGADO", "ANULADO", "DEVOLUCION", "REAGENDADO"]
 
-# Función extractora de productos
 def decodificar_productos(producto_str):
     articulos = []
     if not producto_str or pd.isna(producto_str): return articulos
@@ -55,12 +59,10 @@ def decodificar_productos(producto_str):
             articulos.append({'sku': p, 'cant': 1})
     return articulos
 
-# Función para pintar de verde sutil las filas armadas
 def resaltar_armado(row):
     color = 'background-color: #e8f5e9; color: black' if row['estado'] == 'ARMADO' else ''
     return [color] * len(row)
 
-# Función Anti-Crash para descargar datos
 def descargar_datos_seguros(nombre_tabla):
     try:
         respuesta = supabase.table(nombre_tabla).select("*").execute()
@@ -75,6 +77,16 @@ tab1, tab2, tab3, tab4 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas por Día",
 # --- PESTAÑA 1: AGENDAR ---
 with tab1:
     st.header("Ingreso de ventas")
+    
+    # 1. Recuperar y mostrar mensajes guardados en memoria después de refrescar
+    if 'msg_exito' in st.session_state:
+        st.success(st.session_state['msg_exito'])
+        del st.session_state['msg_exito']
+    if 'msg_alertas' in st.session_state:
+        for alerta in st.session_state['msg_alertas']:
+            st.warning(alerta)
+        del st.session_state['msg_alertas']
+
     st.write("Copia de tu Excel y pega directo en la primera celda.")
     
     df_base = pd.DataFrame(index=range(15), columns=[
@@ -82,9 +94,11 @@ with tab1:
         "distrito", "medio", "monto", "direccion", "producto", "business", "observaciones"
     ])
     
+    # 2. La tabla ahora usa la variable 'limpiador' para generar una vista fresca cada vez
     df_editado = st.data_editor(
         df_base, 
         num_rows="dynamic",
+        key=f"editor_pedidos_{st.session_state['limpiador_tab1']}",
         column_config={
             "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio),
             "monto": st.column_config.NumberColumn("Monto", format="S/ %.2f"),
@@ -159,10 +173,14 @@ with tab1:
                     supabase.table("pedidos").insert(nuevos_registros).execute()
                     for op in operaciones_descuento:
                         supabase.table("inventario").update({"stock_actual": op['nuevo_stock']}).eq("sku", op['sku']).execute()
-                    st.success(f"✅ ¡{len(nuevos_registros)} pedidos registrados en la nube!")
                     
-                    for alerta in set(alertas_stock):
-                        st.warning(alerta)
+                    # 3. Guardar mensajes y activar el limpiador
+                    st.session_state['msg_exito'] = f"✅ ¡{len(nuevos_registros)} pedidos registrados en la nube!"
+                    if alertas_stock:
+                        st.session_state['msg_alertas'] = list(set(alertas_stock))
+                    
+                    st.session_state['limpiador_tab1'] += 1 # Cambia la llave de la tabla
+                    st.rerun() # Refresca la pantalla al instante
                         
                 except Exception as e:
                     st.error(f"❌ Error al guardar en la nube: {e}")
@@ -202,10 +220,7 @@ with tab2:
                         df_medio = df_activos[filtro_medio & filtro_fecha].copy()
                         
                         if not df_medio.empty:
-                            # 1. ORDENAR: El pedido más reciente (ID más alto) aparece arriba
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
-                            
-                            # 2. PINTAR: Aplicamos la función de color verde a las filas que digan "ARMADO"
                             columnas_mostrar = ['id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'producto', 'business', 'estado']
                             df_estilo = df_medio[columnas_mostrar].style.apply(resaltar_armado, axis=1)
                             

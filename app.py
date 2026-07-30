@@ -51,7 +51,7 @@ tab1, tab2, tab3 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas y Despachos", "�
 # --- PESTAÑA 1: AGENDAR (Celdas Interactivas y Desplegables) ---
 with tab1:
     st.header("Ingreso de ventas")
-    st.write("Completa las celdas. Haz doble clic para usar los calendarios y menús desplegables.")
+    st.write("Copia y pega desde tu Excel, o haz doble clic en las celdas para usar los menús desplegables.")
     
     # Lista de opciones para los desplegables
     opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB"]
@@ -69,8 +69,8 @@ with tab1:
         num_rows="dynamic",
         column_config={
             "id_pedido": st.column_config.TextColumn("ID", required=True),
-            "fecha_pedido": st.column_config.DateColumn("Fecha Pedido", format="YYYY-MM-DD"),
-            "fecha_entrega": st.column_config.DateColumn("Fecha Entrega", format="YYYY-MM-DD"),
+            "fecha_pedido": st.column_config.TextColumn("Fecha Pedido (DD/MM/YYYY)"), # Cambiado a Texto
+            "fecha_entrega": st.column_config.TextColumn("Fecha Entrega (DD/MM/YYYY)"), # Cambiado a Texto
             "nombre": st.column_config.TextColumn("Nombre del Cliente", required=True),
             "celular": st.column_config.TextColumn("Celular"),
             "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio, required=True),
@@ -84,22 +84,20 @@ with tab1:
     
     # Guardar en base de datos
     if st.button("Registrar Pedidos"):
-        df_limpio = df_editado.dropna(subset=['id_pedido', 'nombre', 'producto'], how='any')
+        # Limpiamos filas vacías asegurándonos de que haya un ID
+        df_limpio = df_editado.dropna(subset=['id_pedido'], how='any')
         
         if not df_limpio.empty:
             try:
-                # Convertir fechas a texto para que la base de datos las guarde bien
-                df_limpio['fecha_pedido'] = df_limpio['fecha_pedido'].astype(str)
-                df_limpio['fecha_entrega'] = df_limpio['fecha_entrega'].astype(str)
                 df_limpio['estado'] = 'Pendiente'
                 
                 with sqlite3.connect('control_go_v2.db') as conn:
                     df_limpio.to_sql('pedidos', conn, if_exists='append', index=False)
-                st.success("✅ Pedidos agendados correctamente con todos los detalles financieros y logísticos.")
+                st.success("✅ Pedidos agendados correctamente. Revisa la pestaña de Despachos.")
             except Exception as e:
                 st.error(f"⚠️ Error. Asegúrate de no repetir el ID de un pedido ya registrado. Detalle: {e}")
         else:
-            st.warning("⚠️ Rellena al menos los campos obligatorios (ID, Nombre, Producto) antes de guardar.")
+            st.warning("⚠️ Rellena al menos el campo de ID antes de guardar.")
 
 # --- PESTAÑA 2: DESPACHOS ---
 with tab2:

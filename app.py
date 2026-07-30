@@ -55,6 +55,11 @@ def decodificar_productos(producto_str):
             articulos.append({'sku': p, 'cant': 1})
     return articulos
 
+# Función para pintar de verde sutil las filas armadas
+def resaltar_armado(row):
+    color = 'background-color: #e8f5e9; color: black' if row['estado'] == 'ARMADO' else ''
+    return [color] * len(row)
+
 # Función Anti-Crash para descargar datos
 def descargar_datos_seguros(nombre_tabla):
     try:
@@ -99,7 +104,7 @@ with tab1:
             inventario_db = {item['sku']: item for item in datos_inv}
             error_bloqueante = False
             operaciones_descuento = []
-            alertas_stock = [] # <-- RECUPERADO: Lista para guardar las alertas
+            alertas_stock = []
             
             for index, row in df_limpio.iterrows():
                 articulos_pedidos = decodificar_productos(row['producto'])
@@ -116,7 +121,6 @@ with tab1:
                         
                         operaciones_descuento.append({'sku': art['sku'], 'nuevo_stock': nuevo_stock})
                         
-                        # <-- RECUPERADO: Lógica de avisos
                         if nuevo_stock < 0:
                             alertas_stock.append(f"⚠️ Atención: '{art['sku']}' quedó con stock negativo ({nuevo_stock}).")
                         elif nuevo_stock <= stock_minimo:
@@ -157,7 +161,6 @@ with tab1:
                         supabase.table("inventario").update({"stock_actual": op['nuevo_stock']}).eq("sku", op['sku']).execute()
                     st.success(f"✅ ¡{len(nuevos_registros)} pedidos registrados en la nube!")
                     
-                    # <-- RECUPERADO: Mostrar alertas en pantalla después de guardar
                     for alerta in set(alertas_stock):
                         st.warning(alerta)
                         
@@ -199,8 +202,15 @@ with tab2:
                         df_medio = df_activos[filtro_medio & filtro_fecha].copy()
                         
                         if not df_medio.empty:
+                            # 1. ORDENAR: El pedido más reciente (ID más alto) aparece arriba
+                            df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
+                            
+                            # 2. PINTAR: Aplicamos la función de color verde a las filas que digan "ARMADO"
+                            columnas_mostrar = ['id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'producto', 'business', 'estado']
+                            df_estilo = df_medio[columnas_mostrar].style.apply(resaltar_armado, axis=1)
+                            
                             df_rutas = st.data_editor(
-                                df_medio[['id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'producto', 'business', 'estado']], 
+                                df_estilo, 
                                 key=f"editor_{medio}", 
                                 disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "producto", "business"], 
                                 column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado, required=True)}, 
@@ -268,7 +278,6 @@ with tab4:
             if df_inv_limpio.duplicated(subset=['sku']).any():
                 df_inv_limpio = df_inv_limpio.drop_duplicates(subset=['sku'], keep='last')
             
-            # --- POKA-YOKE: Limpieza estricta de datos (forzado a números o cero) ---
             df_inv_limpio['stock_actual'] = pd.to_numeric(df_inv_limpio['stock_actual'], errors='coerce').fillna(0).astype(int)
             df_inv_limpio['precio'] = pd.to_numeric(df_inv_limpio['precio'], errors='coerce').fillna(0.0)
             df_inv_limpio['stock_minimo'] = pd.to_numeric(df_inv_limpio['stock_minimo'], errors='coerce').fillna(0).astype(int)
@@ -283,7 +292,6 @@ with tab4:
             except Exception as e:
                 st.error(f"❌ Error al guardar inventario: {e}")
                 
-        # --- RECUPERADO: Panel de Compras (Reposición) ---
         st.markdown("---")
         st.subheader("🛒 Panel de Compras (Reposición)")
         

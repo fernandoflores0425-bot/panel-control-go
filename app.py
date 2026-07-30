@@ -51,13 +51,14 @@ st.title("📦 Panel de Control Operativo")
 
 tab1, tab2, tab3 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas por Día", "⚠️ Alertas de Inventario"])
 
-# --- PESTAÑA 1: AGENDAR ---
+# --- PESTAÑA 1: AGENDAR (Automático y Rápido) ---
 with tab1:
     st.header("Ingreso de ventas")
-    st.write("Copia y pega desde tu Excel. Observaciones al final.")
+    st.write("Copia de tu Excel y pega directo en la primera celda. Los IDs se generarán automáticamente.")
     
-    df_base = pd.DataFrame(columns=[
-        "id_pedido", "fecha_pedido", "fecha_entrega", "nombre", "celular", 
+    # Creamos un lienzo con 15 filas vacías pre-creadas para facilitar el pegado masivo
+    df_base = pd.DataFrame(index=range(15), columns=[
+        "fecha_pedido", "fecha_entrega", "nombre", "celular", 
         "distrito", "medio", "monto", "direccion", "producto", "business", "observaciones"
     ])
     
@@ -65,50 +66,72 @@ with tab1:
         df_base, 
         num_rows="dynamic",
         column_config={
-            "id_pedido": st.column_config.TextColumn("ID", required=True),
             "fecha_pedido": st.column_config.TextColumn("Fecha Pedido (DD/MM/YYYY)"),
             "fecha_entrega": st.column_config.TextColumn("Fecha Entrega (DD/MM/YYYY)"),
-            "nombre": st.column_config.TextColumn("Nombre del Cliente", required=True),
+            "nombre": st.column_config.TextColumn("Nombre del Cliente"),
             "celular": st.column_config.TextColumn("Celular"),
             "distrito": st.column_config.TextColumn("Distrito"),
-            "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio, required=True),
+            "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio),
             "monto": st.column_config.NumberColumn("Monto", format="S/ %.2f", min_value=0.0),
             "direccion": st.column_config.TextColumn("Dirección"),
-            "producto": st.column_config.TextColumn("Producto", required=True),
-            "business": st.column_config.SelectboxColumn("Business", options=opciones_business, required=True),
+            "producto": st.column_config.TextColumn("Producto"),
+            "business": st.column_config.SelectboxColumn("Business", options=opciones_business),
             "observaciones": st.column_config.TextColumn("Observaciones")
         },
         use_container_width=True
     )
     
     if st.button("Registrar Pedidos"):
-        df_limpio = df_editado.dropna(subset=['id_pedido'], how='any').copy()
+        # Limpiamos las filas que el usuario dejó vacías (exigimos que al menos haya un nombre y producto)
+        df_limpio = df_editado.dropna(subset=['nombre', 'producto'], how='any').copy()
         
         if not df_limpio.empty:
             try:
-                # Limpieza automatizada de espacios en blanco invisibles de Excel
+                # Limpieza de espacios en blanco
                 for col in df_limpio.columns:
                     if df_limpio[col].dtype == 'object':
                         df_limpio[col] = df_limpio[col].astype(str).str.strip()
-                        
-                df_limpio['estado'] = 'POR ARMAR'
+                
+                # MOTOR DE AUTO-ID
                 with sqlite3.connect('control_go_v4.db') as conn:
+                    cursor = conn.cursor()
+                    # Buscar el último ID registrado para saber dónde continuar
+                    cursor.execute("SELECT id_pedido FROM pedidos ORDER BY ROWID DESC LIMIT 1")
+                    ultimo_registro = cursor.fetchone()
+                    
+                    if ultimo_registro and ultimo_registro[0].startswith("CG-"):
+                        try:
+                            ultimo_numero = int(ultimo_registro[0].split("-")[1])
+                        except ValueError:
+                            ultimo_numero = 1000
+                    else:
+                        ultimo_numero = 1000 # El sistema empieza en CG-1001
+                    
+                    # Generar la lista de nuevos IDs
+                    nuevos_ids = []
+                    for i in range(len(df_limpio)):
+                        ultimo_numero += 1
+                        nuevos_ids.append(f"CG-{ultimo_numero}")
+                    
+                    # Insertar los IDs como la primera columna de los datos
+                    df_limpio.insert(0, 'id_pedido', nuevos_ids)
+                    df_limpio['estado'] = 'POR ARMAR'
+                    
+                    # Guardar en base de datos
                     df_limpio.to_sql('pedidos', conn, if_exists='append', index=False)
-                st.success("✅ Pedidos agendados correctamente.")
+                st.success(f"✅ ¡{len(df_limpio)} pedidos agendados exitosamente! Se generaron los códigos desde {nuevos_ids[0]} hasta {nuevos_ids[-1]}.")
             except Exception as e:
-                st.error(f"⚠️ Error. Asegúrate de no repetir el ID. Detalle: {e}")
+                st.error(f"⚠️ Error al procesar. Detalle: {e}")
         else:
-            st.warning("⚠️ Rellena al menos el campo de ID antes de guardar.")
+            st.warning("⚠️ La tabla está vacía o faltan datos obligatorios (Nombre y Producto).")
 
 # --- PESTAÑA 2: RUTAS Y DESPACHOS ---
 with tab2:
     st.header("Torre de Control de Despachos")
     
-    # Extraer fechas disponibles de la base de datos para el desplegable
     with sqlite3.connect('control_go_v4.db') as conn:
         fechas_df = pd.read_sql_query("SELECT DISTINCT fecha_entrega FROM pedidos WHERE estado NOT IN ('ENTREGADO', 'ANULADO', 'DEVOLUCION') AND fecha_entrega IS NOT NULL", conn)
     
-    # Limpiar y ordenar la lista de fechas
     lista_fechas = [f.strip() for f in fechas_df['fecha_entrega'].astype(str).tolist() if f.strip() != "nan" and f.strip() != "None" and f.strip() != ""]
     
     if not lista_fechas:
@@ -134,7 +157,6 @@ with tab2:
                 st.subheader(f"🚚 {medio}")
                 
                 with sqlite3.connect('control_go_v4.db') as conn:
-                    # Filtro exacto por el medio y la fecha seleccionada en el desplegable
                     query = """
                     SELECT id_pedido, nombre, celular, distrito, monto, producto, business, estado 
                     FROM pedidos 
@@ -175,12 +197,12 @@ with tab2:
                             else:
                                 st.info("No detecté cambios.")
                 else:
-                    st.info(f"Ruta limpia. No hay paquetes pendientes para {medio} hoy.")
+                    st.info(f"Ruta limpia. No hay paquetes pendientes.")
                 
                 st.write("") 
                 st.write("")
     else:
-        st.warning("Selecciona al menos un medio de envío para ver sus rutas.")
+        st.warning("Selecciona al menos un medio de envío.")
 
 # --- PESTAÑA 3: INVENTARIO ---
 with tab3:

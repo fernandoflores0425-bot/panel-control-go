@@ -39,8 +39,9 @@ supabase = init_connection()
 opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "GOATE"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 
-# NUEVOS ESTADOS OPERATIVOS
-opciones_estado = ["POR ARMAR", "ARMADO", "EN RUTA", "POR RECOGER", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
+# SEPARACIÓN DE ESTADOS (POKA-YOKE VISUAL)
+opciones_estado_general = ["POR ARMAR", "ARMADO", "EN RUTA", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
+opciones_estado_todas = ["POR ARMAR", "ARMADO", "EN RUTA", "POR RECOGER", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
 
 def decodificar_productos(producto_str):
     articulos = []
@@ -230,25 +231,58 @@ with tab2:
                             total_pedidos = len(df_medio)
                             pedidos_armados = len(df_medio[df_medio['estado'] == 'ARMADO'])
                             
-                            st.markdown(f"<h3 style='margin-bottom: 5px;'>🚚 {medio} <span style='font-size: 16px; font-weight: normal; color: #888;'>({pedidos_armados} de {total_pedidos} listos)</span></h3>", unsafe_allow_html=True)
+                            # --- DISEÑO HEADER CON BOTÓN MASIVO EN LA ESQUINA ---
+                            col_titulo, col_espacio, col_select, col_btn = st.columns([5, 1, 3, 2])
+                            with col_titulo:
+                                st.markdown(f"<h3 style='margin-bottom: 5px; margin-top: 10px;'>🚚 {medio} <span style='font-size: 16px; font-weight: normal; color: #888;'>({pedidos_armados} de {total_pedidos} listos)</span></h3>", unsafe_allow_html=True)
+                            with col_select:
+                                estado_masivo = st.selectbox("Cambio", opciones_estado_general, key=f"sel_masivo_{medio}", label_visibility="collapsed")
+                            with col_btn:
+                                btn_masivo = st.button("Aplicar a ✔️", key=f"btn_masivo_{medio}", use_container_width=True)
                             
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
-                            columnas_mostrar = ['id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'producto', 'business', 'estado']
+                            
+                            # Inyectamos columna de Checkbox
+                            df_medio.insert(0, '✔️', False)
+                            
+                            columnas_mostrar = ['✔️', 'id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'producto', 'business', 'estado']
                             df_estilo = df_medio[columnas_mostrar].style.apply(resaltar_armado, axis=1)
                             
                             df_rutas = st.data_editor(
                                 df_estilo, 
                                 key=f"editor_{medio}", 
                                 disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "producto", "business"], 
-                                column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado, required=True)}, 
+                                column_config={
+                                    "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general, required=True),
+                                    "✔️": st.column_config.CheckboxColumn("✔️", default=False, width="small")
+                                }, 
                                 use_container_width=True, hide_index=True
                             )
-                            if st.button(f"Guardar Cambios - {medio}", key=f"btn_{medio}"):
+                            
+                            # --- LÓGICA DE ACTUALIZACIÓN MASIVA ---
+                            if btn_masivo:
+                                seleccionados = df_rutas[df_rutas['✔️'] == True]
+                                if not seleccionados.empty:
+                                    cambios = 0
+                                    for index, row in seleccionados.iterrows():
+                                        if row['estado'] != estado_masivo:
+                                            supabase.table("pedidos").update({"estado": estado_masivo}).eq("id_pedido", row['id_pedido']).execute()
+                                            cambios += 1
+                                    st.success(f"✅ {cambios} pedidos actualizados a {estado_masivo}.")
+                                    st.rerun()
+                                else:
+                                    st.warning("⚠️ Primero marca la casilla '✔️' en los pedidos que deseas cambiar.")
+                            
+                            # --- LÓGICA DE ACTUALIZACIÓN INDIVIDUAL (Clásica) ---
+                            if st.button(f"Guardar Cambios Individuales - {medio}", key=f"btn_{medio}"):
+                                cambios = 0
                                 for index, row in df_rutas.iterrows():
                                     if row['estado'] != df_medio.loc[index, 'estado']:
                                         supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
-                                st.success("✅ Actualizado.")
-                                st.rerun()
+                                        cambios += 1
+                                if cambios > 0:
+                                    st.success(f"✅ Se actualizaron {cambios} pedidos.")
+                                    st.rerun()
                         else:
                             st.markdown(f"<h3 style='margin-bottom: 5px;'>🚚 {medio}</h3>", unsafe_allow_html=True)
                             st.info("Ruta limpia.")
@@ -268,7 +302,7 @@ with tab3:
             df_editado_global = st.data_editor(
                 df_editar.head(20), 
                 use_container_width=True, hide_index=True, disabled=["id_pedido"],
-                column_config={"medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado)}
+                column_config={"medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas)}
             )
             if st.button("💾 Guardar Ediciones"):
                 try:
@@ -358,7 +392,6 @@ with tab5:
         df_shalom = pd.DataFrame(datos_shalom)
         
         if not df_shalom.empty:
-            # Filtramos los que son PROV y quitamos los estados finales para limpiar la vista
             estados_finales = ["ENTREGADO", "ANULADO", "DEVOLUCION"]
             df_prov = df_shalom[(df_shalom['medio'] == 'PROV') & (~df_shalom['estado'].isin(estados_finales))].copy()
             
@@ -367,7 +400,6 @@ with tab5:
                 df_prov['deuda'] = 0.0
                 df_prov['clave'] = ""
                 
-                # Extracción automática de observaciones (Poka-yoke)
                 for idx, row in df_prov.iterrows():
                     obs = str(row['observaciones']).lower() if pd.notna(row['observaciones']) else ""
                     monto = float(row['monto']) if pd.notna(row['monto']) and str(row['monto']).strip() != "" else 0.0
@@ -392,7 +424,7 @@ with tab5:
                 
                 df_prov = df_prov.sort_values(by="id_pedido", ascending=False)
                 
-                st.write(f"Mostrando **{len(df_prov)}** envíos en tránsito a provincia. Los pedidos marcados como 'ENTREGADO' desaparecerán automáticamente de esta lista.")
+                st.write(f"Mostrando **{len(df_prov)}** envíos en tránsito a provincia. Los pedidos marcados como 'ENTREGADO' desaparecerán automáticamente.")
                 
                 columnas_shalom = ['id_pedido', 'nombre', 'celular', 'monto', 'adelanto', 'deuda', 'clave', 'estado']
                 
@@ -401,7 +433,7 @@ with tab5:
                     key="editor_shalom", 
                     disabled=["id_pedido", "nombre", "celular", "monto", "adelanto", "deuda", "clave"], 
                     column_config={
-                        "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado, required=True),
+                        "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas, required=True),
                         "monto": st.column_config.NumberColumn("Monto", format="S/ %.2f"),
                         "adelanto": st.column_config.NumberColumn("Adelanto", format="S/ %.2f"),
                         "deuda": st.column_config.NumberColumn("Deuda a Cobrar", format="S/ %.2f"),

@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import datetime
+import re
 from supabase import create_client, Client
 
 # --- 1. CONFIGURACIÓN VISUAL Y DE MEMORIA ---
@@ -37,7 +38,9 @@ supabase = init_connection()
 # --- 3. VARIABLES GLOBALES Y FUNCIONES ---
 opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "GOATE"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
-opciones_estado = ["POR ARMAR", "ARMADO", "ENTREGADO", "ANULADO", "DEVOLUCION", "REAGENDADO"]
+
+# NUEVOS ESTADOS OPERATIVOS
+opciones_estado = ["POR ARMAR", "ARMADO", "EN RUTA", "POR RECOGER", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
 
 def decodificar_productos(producto_str):
     articulos = []
@@ -78,7 +81,7 @@ def procesar_fecha(valor):
     return str(valor)
 
 st.title("📦 Panel de Control Operativo")
-tab1, tab2, tab3, tab4 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas por Día", "✏️ Editar Pedidos", "📊 Maestro de Inventario"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas por Día", "✏️ Editar Pedidos", "📊 Maestro de Inventario", "📦 Shalom (Provincias)"])
 
 # --- PESTAÑA 1: AGENDAR ---
 with tab1:
@@ -204,7 +207,7 @@ with tab2:
         if df_todos.empty:
             st.info("Aún no hay pedidos registrados. Usa la Pestaña 1.")
         else:
-            estados_activos = ["POR ARMAR", "ARMADO", "REAGENDADO"]
+            estados_activos = ["POR ARMAR", "ARMADO", "REPROGRAMADO"]
             df_activos = df_todos[df_todos['estado'].isin(estados_activos)].copy()
             lista_fechas = sorted(df_activos['fecha_entrega'].dropna().unique().tolist())
             
@@ -219,17 +222,14 @@ with tab2:
                 for i, medio in enumerate(medios_seleccionados):
                     with columnas[i % 2]:
                         
-                        # 1. Filtramos primero para tener los datos matemáticos
                         filtro_medio = df_activos['medio'] == medio
-                        filtro_fecha = (df_activos['fecha_entrega'] == fecha_filtro) | (df_activos['estado'] == "REAGENDADO")
+                        filtro_fecha = (df_activos['fecha_entrega'] == fecha_filtro) | (df_activos['estado'] == "REPROGRAMADO")
                         df_medio = df_activos[filtro_medio & filtro_fecha].copy()
                         
                         if not df_medio.empty:
-                            # 2. KPI VISUAL: Contar total y armados
                             total_pedidos = len(df_medio)
                             pedidos_armados = len(df_medio[df_medio['estado'] == 'ARMADO'])
                             
-                            # 3. Imprimimos el título combinando el nombre del Courier y el contador pequeño al costado
                             st.markdown(f"<h3 style='margin-bottom: 5px;'>🚚 {medio} <span style='font-size: 16px; font-weight: normal; color: #888;'>({pedidos_armados} de {total_pedidos} listos)</span></h3>", unsafe_allow_html=True)
                             
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
@@ -347,3 +347,79 @@ with tab4:
                     st.success("✅ Tu inventario principal está sano.")
             else:
                 st.info("ℹ️ Define el Stock Mínimo y Stock Ideal en la tabla superior para activar las alertas de reposición.")
+
+# --- PESTAÑA 5: SHALOM (PROVINCIAS) ---
+with tab5:
+    st.header("📦 Control Shalom (Envíos a Provincia)")
+    
+    datos_shalom = descargar_datos_seguros("pedidos")
+    
+    if datos_shalom is not None:
+        df_shalom = pd.DataFrame(datos_shalom)
+        
+        if not df_shalom.empty:
+            # Filtramos los que son PROV y quitamos los estados finales para limpiar la vista
+            estados_finales = ["ENTREGADO", "ANULADO", "DEVOLUCION"]
+            df_prov = df_shalom[(df_shalom['medio'] == 'PROV') & (~df_shalom['estado'].isin(estados_finales))].copy()
+            
+            if not df_prov.empty:
+                df_prov['adelanto'] = 0.0
+                df_prov['deuda'] = 0.0
+                df_prov['clave'] = ""
+                
+                # Extracción automática de observaciones (Poka-yoke)
+                for idx, row in df_prov.iterrows():
+                    obs = str(row['observaciones']).lower() if pd.notna(row['observaciones']) else ""
+                    monto = float(row['monto']) if pd.notna(row['monto']) and str(row['monto']).strip() != "" else 0.0
+                    
+                    adelanto = 0.0
+                    match_adelanto = re.search(r'adelanto\s*:?\s*(\d+(?:\.\d+)?)', obs)
+                    if match_adelanto:
+                        adelanto = float(match_adelanto.group(1))
+                        
+                    clave = ""
+                    match_clave = re.search(r'clave\s*:?\s*(\d{4})', obs)
+                    if match_clave:
+                        clave = match_clave.group(1)
+                    else:
+                        match_4d = re.search(r'\b\d{4}\b', obs)
+                        if match_4d:
+                            clave = match_4d.group()
+                            
+                    df_prov.at[idx, 'adelanto'] = adelanto
+                    df_prov.at[idx, 'deuda'] = monto - adelanto
+                    df_prov.at[idx, 'clave'] = clave
+                
+                df_prov = df_prov.sort_values(by="id_pedido", ascending=False)
+                
+                st.write(f"Mostrando **{len(df_prov)}** envíos en tránsito a provincia. Los pedidos marcados como 'ENTREGADO' desaparecerán automáticamente de esta lista.")
+                
+                columnas_shalom = ['id_pedido', 'nombre', 'celular', 'monto', 'adelanto', 'deuda', 'clave', 'estado']
+                
+                df_rutas_shalom = st.data_editor(
+                    df_prov[columnas_shalom], 
+                    key="editor_shalom", 
+                    disabled=["id_pedido", "nombre", "celular", "monto", "adelanto", "deuda", "clave"], 
+                    column_config={
+                        "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado, required=True),
+                        "monto": st.column_config.NumberColumn("Monto", format="S/ %.2f"),
+                        "adelanto": st.column_config.NumberColumn("Adelanto", format="S/ %.2f"),
+                        "deuda": st.column_config.NumberColumn("Deuda a Cobrar", format="S/ %.2f"),
+                    }, 
+                    use_container_width=True, hide_index=True
+                )
+                
+                if st.button("💾 Guardar Cambios Shalom"):
+                    cambios = 0
+                    for index, row in df_rutas_shalom.iterrows():
+                        original_estado = df_prov.loc[index, 'estado']
+                        if row['estado'] != original_estado:
+                            supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
+                            cambios += 1
+                    if cambios > 0:
+                        st.success(f"✅ Se actualizaron {cambios} pedidos de provincia.")
+                        st.rerun()
+            else:
+                st.info("Ruta limpia. No hay envíos pendientes de cobro/recojo en provincia.")
+        else:
+            st.info("Aún no hay pedidos registrados.")

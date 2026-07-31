@@ -231,14 +231,14 @@ with tab2:
                             total_pedidos = len(df_medio)
                             pedidos_armados = len(df_medio[df_medio['estado'] == 'ARMADO'])
                             
-                            # --- DISEÑO HEADER CON BOTÓN MASIVO EN LA ESQUINA ---
-                            col_titulo, col_espacio, col_select, col_btn = st.columns([5, 1, 3, 2])
+                            # --- DISEÑO HEADER: Ajuste de proporciones (botón más pequeño) ---
+                            col_titulo, col_espacio, col_select, col_btn = st.columns([6, 1, 3, 1.5])
                             with col_titulo:
                                 st.markdown(f"<h3 style='margin-bottom: 5px; margin-top: 10px;'>🚚 {medio} <span style='font-size: 16px; font-weight: normal; color: #888;'>({pedidos_armados} de {total_pedidos} listos)</span></h3>", unsafe_allow_html=True)
                             with col_select:
                                 estado_masivo = st.selectbox("Cambio", opciones_estado_general, key=f"sel_masivo_{medio}", label_visibility="collapsed")
                             with col_btn:
-                                btn_masivo = st.button("Aplicar a ✔️", key=f"btn_masivo_{medio}", use_container_width=True)
+                                btn_masivo = st.button("Aplicar a", key=f"btn_masivo_{medio}", use_container_width=True)
                             
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
                             

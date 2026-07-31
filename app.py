@@ -70,7 +70,6 @@ def descargar_datos_seguros(nombre_tabla):
         st.error(f"❌ ERROR CRÍTICO: No se pudo leer la tabla '{nombre_tabla}'. Detalle: {e}")
         return None
 
-# NUEVO POKA-YOKE: Estandarización estricta de formato de fecha
 def procesar_fecha(valor):
     if pd.isna(valor) or valor == "":
         return ""
@@ -105,7 +104,6 @@ with tab1:
         num_rows="dynamic",
         key=f"editor_pedidos_{st.session_state['limpiador_tab1']}",
         column_config={
-            # POKA-YOKE VISUAL: Columna de fecha con calendario forzado
             "fecha_pedido": st.column_config.DateColumn("Fecha Pedido", format="DD/MM/YYYY"),
             "fecha_entrega": st.column_config.DateColumn("Fecha Entrega", format="DD/MM/YYYY"),
             "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio),
@@ -220,13 +218,20 @@ with tab2:
                 columnas = st.columns(2)
                 for i, medio in enumerate(medios_seleccionados):
                     with columnas[i % 2]:
-                        st.subheader(f"🚚 {medio}")
+                        
+                        # 1. Filtramos primero para tener los datos matemáticos
                         filtro_medio = df_activos['medio'] == medio
                         filtro_fecha = (df_activos['fecha_entrega'] == fecha_filtro) | (df_activos['estado'] == "REAGENDADO")
-                        
                         df_medio = df_activos[filtro_medio & filtro_fecha].copy()
                         
                         if not df_medio.empty:
+                            # 2. KPI VISUAL: Contar total y armados
+                            total_pedidos = len(df_medio)
+                            pedidos_armados = len(df_medio[df_medio['estado'] == 'ARMADO'])
+                            
+                            # 3. Imprimimos el título combinando el nombre del Courier y el contador pequeño al costado
+                            st.markdown(f"<h3 style='margin-bottom: 5px;'>🚚 {medio} <span style='font-size: 16px; font-weight: normal; color: #888;'>({pedidos_armados} de {total_pedidos} listos)</span></h3>", unsafe_allow_html=True)
+                            
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
                             columnas_mostrar = ['id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'producto', 'business', 'estado']
                             df_estilo = df_medio[columnas_mostrar].style.apply(resaltar_armado, axis=1)
@@ -245,6 +250,7 @@ with tab2:
                                 st.success("✅ Actualizado.")
                                 st.rerun()
                         else:
+                            st.markdown(f"<h3 style='margin-bottom: 5px;'>🚚 {medio}</h3>", unsafe_allow_html=True)
                             st.info("Ruta limpia.")
 
 # --- PESTAÑA 3: BUSCAR Y EDITAR ---

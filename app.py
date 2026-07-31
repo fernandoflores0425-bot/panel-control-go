@@ -10,6 +10,9 @@ st.set_page_config(page_title="Control Go - Operaciones", layout="wide")
 if 'limpiador_tab1' not in st.session_state:
     st.session_state['limpiador_tab1'] = 0
 
+if 'limpiador_ingreso' not in st.session_state:
+    st.session_state['limpiador_ingreso'] = 0
+
 st.markdown("""
     <style>
     .stButton>button {
@@ -82,7 +85,10 @@ def procesar_fecha(valor):
     return str(valor)
 
 st.title("📦 Panel de Control Operativo")
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Agendar Pedidos", "🚚 Rutas por Día", "✏️ Editar Pedidos", "📊 Maestro de Inventario", "📦 Shalom (Provincias)"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📝 Agendar Pedidos", "🚚 Rutas por Día", "✏️ Editar Pedidos", 
+    "📊 Maestro de Inventario", "📦 Shalom (Provincias)", "📥 Ingreso Mercadería"
+])
 
 # --- PESTAÑA 1: AGENDAR ---
 with tab1:
@@ -231,7 +237,6 @@ with tab2:
                             total_pedidos = len(df_medio)
                             pedidos_armados = len(df_medio[df_medio['estado'] == 'ARMADO'])
                             
-                            # --- DISEÑO HEADER: Ajuste de proporciones (botón más pequeño) ---
                             col_titulo, col_espacio, col_select, col_btn = st.columns([6, 1, 3, 1.5])
                             with col_titulo:
                                 st.markdown(f"<h3 style='margin-bottom: 5px; margin-top: 10px;'>🚚 {medio} <span style='font-size: 16px; font-weight: normal; color: #888;'>({pedidos_armados} de {total_pedidos} listos)</span></h3>", unsafe_allow_html=True)
@@ -242,7 +247,6 @@ with tab2:
                             
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
                             
-                            # Inyectamos columna de Checkbox
                             df_medio.insert(0, '✔️', False)
                             
                             columnas_mostrar = ['✔️', 'id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'producto', 'business', 'estado']
@@ -259,7 +263,6 @@ with tab2:
                                 use_container_width=True, hide_index=True
                             )
                             
-                            # --- LÓGICA DE ACTUALIZACIÓN MASIVA ---
                             if btn_masivo:
                                 seleccionados = df_rutas[df_rutas['✔️'] == True]
                                 if not seleccionados.empty:
@@ -273,7 +276,6 @@ with tab2:
                                 else:
                                     st.warning("⚠️ Primero marca la casilla '✔️' en los pedidos que deseas cambiar.")
                             
-                            # --- LÓGICA DE ACTUALIZACIÓN INDIVIDUAL (Clásica) ---
                             if st.button(f"Guardar Cambios Individuales - {medio}", key=f"btn_{medio}"):
                                 cambios = 0
                                 for index, row in df_rutas.iterrows():
@@ -455,3 +457,84 @@ with tab5:
                 st.info("Ruta limpia. No hay envíos pendientes de cobro/recojo en provincia.")
         else:
             st.info("Aún no hay pedidos registrados.")
+
+# --- PESTAÑA 6: INGRESO DE MERCADERÍA ---
+with tab6:
+    st.header("📥 Ingreso de Mercadería (Reposición)")
+    st.write("Ingresa el SKU y la cantidad. El sistema buscará el nombre para que valides antes de sumar al stock.")
+    
+    if 'msg_exito_ingreso' in st.session_state:
+        st.success(st.session_state['msg_exito_ingreso'])
+        del st.session_state['msg_exito_ingreso']
+
+    datos_inv_repo = descargar_datos_seguros("inventario")
+    if datos_inv_repo is not None:
+        inventario_db = {item['sku']: item for item in datos_inv_repo}
+        
+        df_ingreso_base = pd.DataFrame(index=range(10), columns=["sku", "cantidad"])
+        
+        col1, col2 = st.columns([1, 1.5])
+        
+        with col1:
+            st.subheader("1. Escribe aquí:")
+            df_ingreso = st.data_editor(
+                df_ingreso_base,
+                num_rows="dynamic",
+                key=f"editor_ingreso_{st.session_state['limpiador_ingreso']}",
+                column_config={
+                    "sku": st.column_config.TextColumn("SKU", required=True),
+                    "cantidad": st.column_config.NumberColumn("Cantidad", min_value=1, step=1)
+                },
+                use_container_width=True
+            )
+        
+        # Filtramos solo filas donde hayan puesto ambos datos
+        df_validos = df_ingreso.dropna(subset=['sku', 'cantidad']).copy()
+        
+        with col2:
+            st.subheader("2. Verificación Visual:")
+            if not df_validos.empty:
+                df_validos['sku'] = df_validos['sku'].astype(str).str.strip()
+                df_validos['cantidad'] = pd.to_numeric(df_validos['cantidad'], errors='coerce').fillna(0).astype(int)
+                df_validos = df_validos[df_validos['cantidad'] > 0]
+                
+                nombres = []
+                errores_sku = []
+                
+                for sku in df_validos['sku']:
+                    if sku in inventario_db:
+                        nombres.append(inventario_db[sku]['nombre'])
+                    else:
+                        nombres.append("❌ NO EXISTE")
+                        errores_sku.append(sku)
+                
+                df_validos['Producto (Autocompletado)'] = nombres
+                
+                # Mostramos la tabla de verificación (solo lectura)
+                st.dataframe(
+                    df_validos[['sku', 'Producto (Autocompletado)', 'cantidad']], 
+                    use_container_width=True, 
+                    hide_index=True
+                )
+                
+                if errores_sku:
+                    st.error(f"⚠️ Corrige los SKU que no existen: {', '.join(errores_sku)}")
+                else:
+                    st.success("✅ Todos los SKUs son válidos. Listo para ingresar.")
+                    if st.button("💾 Ingresar Mercadería y Sumar Stock", use_container_width=True):
+                        try:
+                            for idx, row in df_validos.iterrows():
+                                sku_ingreso = row['sku']
+                                cant_ingreso = row['cantidad']
+                                stock_actual = inventario_db[sku_ingreso]['stock_actual']
+                                nuevo_stock = stock_actual + cant_ingreso
+                                
+                                supabase.table("inventario").update({"stock_actual": nuevo_stock}).eq("sku", sku_ingreso).execute()
+                            
+                            st.session_state['msg_exito_ingreso'] = f"✅ ¡Se sumó el stock de {len(df_validos)} productos correctamente!"
+                            st.session_state['limpiador_ingreso'] += 1
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error al sumar stock: {e}")
+            else:
+                st.info("Comienza a escribir a la izquierda para ver los nombres aquí.")

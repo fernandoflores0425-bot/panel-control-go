@@ -64,8 +64,19 @@ def decodificar_productos(producto_str):
             articulos.append({'sku': p, 'cant': 1})
     return articulos
 
-def resaltar_armado(row):
-    color = 'background-color: #e8f5e9; color: black' if row['estado'] == 'ARMADO' else ''
+# NUEVO POKA-YOKE VISUAL: Colores para cada estado operativo
+def resaltar_estados(row):
+    color = ''
+    if row['estado'] == 'ARMADO':
+        color = 'background-color: #e8f5e9; color: black' # Verde suave
+    elif row['estado'] == 'EN RUTA':
+        color = 'background-color: #e3f2fd; color: black' # Azul suave
+    elif row['estado'] == 'ENTREGADO':
+        color = 'background-color: #cfd8dc; color: #546e7a' # Gris (Completado)
+    elif row['estado'] in ['ANULADO', 'DEVOLUCION']:
+        color = 'background-color: #ffebee; color: black' # Rojo suave
+    elif row['estado'] == 'REPROGRAMADO':
+        color = 'background-color: #fff3e0; color: black' # Naranja suave
     return [color] * len(row)
 
 def descargar_datos_seguros(nombre_tabla):
@@ -83,10 +94,8 @@ def procesar_fecha(valor):
         return valor.strftime("%d/%m/%Y")
     return str(valor)
 
-# NUEVA FUNCIÓN: El Cerebro Híbrido de Devoluciones
 def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, producto_str):
     if estado_antiguo in ["POR ARMAR", "ARMADO", "REPROGRAMADO"] and estado_nuevo == "ANULADO":
-        # Caso 1: Estaba en el local y se anuló. ¡Devolvemos el stock automático!
         datos_inv = descargar_datos_seguros("inventario")
         if datos_inv:
             inventario_db = {item['sku']: item for item in datos_inv}
@@ -96,8 +105,8 @@ def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, pr
                     stock_actual = inventario_db[art['sku']]['stock_actual']
                     nuevo_stock = stock_actual + art['cant']
                     supabase.table("inventario").update({"stock_actual": nuevo_stock}).eq("sku", art['sku']).execute()
-        return True # Indica que hizo devolución automática
-    return False # No hizo nada extra
+        return True 
+    return False
 
 st.title("📦 Panel de Control Operativo")
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -229,14 +238,23 @@ with tab2:
         if df_todos.empty:
             st.info("Aún no hay pedidos registrados. Usa la Pestaña 1.")
         else:
-            estados_activos = ["POR ARMAR", "ARMADO", "REPROGRAMADO"]
-            df_activos = df_todos[df_todos['estado'].isin(estados_activos)].copy()
-            lista_fechas = sorted(df_activos['fecha_entrega'].dropna().unique().tolist())
+            # LÓGICA ACTUALIZADA DE FECHAS: Extrae todas las fechas de manera segura y centra en 'hoy'
+            def parse_dmy(d_str):
+                try: return datetime.datetime.strptime(str(d_str), "%d/%m/%Y")
+                except: return datetime.datetime.min
+
+            fechas_validas = [d for d in df_todos['fecha_entrega'].dropna().unique() if str(d).strip() != ""]
+            lista_fechas = sorted(fechas_validas, key=parse_dmy)
+            hoy_str = datetime.datetime.now().strftime("%d/%m/%Y")
             
-            if not lista_fechas:
-                lista_fechas = [datetime.datetime.now().strftime("%d/%m/%Y")]
+            if hoy_str not in lista_fechas:
+                lista_fechas.append(hoy_str)
+                lista_fechas = sorted(lista_fechas, key=parse_dmy)
                 
-            fecha_filtro = st.selectbox("📅 Fecha de ruta:", options=lista_fechas)
+            try: index_hoy = lista_fechas.index(hoy_str)
+            except: index_hoy = len(lista_fechas) - 1
+            
+            fecha_filtro = st.selectbox("📅 Fecha de ruta:", options=lista_fechas, index=index_hoy)
             medios_seleccionados = st.multiselect("Courier:", options=opciones_medio, default=["MD", "ENTRE GO", "URB", "PROV"], max_selections=4)
             
             if medios_seleccionados:
@@ -244,9 +262,10 @@ with tab2:
                 for i, medio in enumerate(medios_seleccionados):
                     with columnas[i % 2]:
                         
-                        filtro_medio = df_activos['medio'] == medio
-                        filtro_fecha = (df_activos['fecha_entrega'] == fecha_filtro) | (df_activos['estado'] == "REPROGRAMADO")
-                        df_medio = df_activos[filtro_medio & filtro_fecha].copy()
+                        # NUEVO FILTRO: Toma TODOS los estados del día + Los Reprogramados de cualquier día
+                        filtro_medio = df_todos['medio'] == medio
+                        filtro_fecha = (df_todos['fecha_entrega'] == fecha_filtro) | (df_todos['estado'] == "REPROGRAMADO")
+                        df_medio = df_todos[filtro_medio & filtro_fecha].copy()
                         
                         if not df_medio.empty:
                             total_pedidos = len(df_medio)
@@ -263,8 +282,9 @@ with tab2:
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
                             df_medio.insert(0, '✔️', False)
                             
+                            # Aplicamos la nueva función de color (resaltar_estados)
                             columnas_mostrar = ['✔️', 'id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business', 'estado']
-                            df_estilo = df_medio[columnas_mostrar].style.apply(resaltar_armado, axis=1)
+                            df_estilo = df_medio[columnas_mostrar].style.apply(resaltar_estados, axis=1)
                             
                             df_rutas = st.data_editor(
                                 df_estilo, 
@@ -285,7 +305,6 @@ with tab2:
                                     for index, row in seleccionados.iterrows():
                                         estado_anterior = df_medio.loc[index, 'estado']
                                         if row['estado'] != estado_anterior:
-                                            # Verificamos si aplica regla híbrida de stock
                                             hizo_devolucion = procesar_cambio_estado_con_stock(row['id_pedido'], estado_anterior, estado_masivo, row['producto'])
                                             if hizo_devolucion: auto_devueltos += 1
                                             

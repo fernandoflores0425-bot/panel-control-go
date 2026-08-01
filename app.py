@@ -249,13 +249,14 @@ with tab2:
                             
                             df_medio.insert(0, '✔️', False)
                             
-                            columnas_mostrar = ['✔️', 'id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'producto', 'business', 'estado']
+                            # AQUÍ AGREGAMOS 'direccion' DESPUÉS DE 'monto'
+                            columnas_mostrar = ['✔️', 'id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business', 'estado']
                             df_estilo = df_medio[columnas_mostrar].style.apply(resaltar_armado, axis=1)
                             
                             df_rutas = st.data_editor(
                                 df_estilo, 
                                 key=f"editor_{medio}", 
-                                disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "producto", "business"], 
+                                disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "direccion", "producto", "business"], 
                                 column_config={
                                     "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general, required=True),
                                     "✔️": st.column_config.CheckboxColumn("✔️", default=False, width="small")
@@ -428,12 +429,13 @@ with tab5:
                 
                 st.write(f"Mostrando **{len(df_prov)}** envíos en tránsito a provincia. Los pedidos marcados como 'ENTREGADO' desaparecerán automáticamente.")
                 
-                columnas_shalom = ['id_pedido', 'nombre', 'celular', 'monto', 'adelanto', 'deuda', 'clave', 'estado']
+                # AQUÍ TAMBIÉN AGREGAMOS 'direccion' DESPUÉS DE 'monto'
+                columnas_shalom = ['id_pedido', 'nombre', 'celular', 'monto', 'direccion', 'adelanto', 'deuda', 'clave', 'estado']
                 
                 df_rutas_shalom = st.data_editor(
                     df_prov[columnas_shalom], 
                     key="editor_shalom", 
-                    disabled=["id_pedido", "nombre", "celular", "monto", "adelanto", "deuda", "clave"], 
+                    disabled=["id_pedido", "nombre", "celular", "monto", "direccion", "adelanto", "deuda", "clave"], 
                     column_config={
                         "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas, required=True),
                         "monto": st.column_config.NumberColumn("Monto", format="S/ %.2f"),
@@ -488,7 +490,6 @@ with tab6:
                 use_container_width=True
             )
         
-        # Filtramos solo filas donde hayan puesto ambos datos
         df_validos = df_ingreso.dropna(subset=['sku', 'cantidad']).copy()
         
         with col2:
@@ -510,7 +511,6 @@ with tab6:
                 
                 df_validos['Producto (Autocompletado)'] = nombres
                 
-                # Mostramos la tabla de verificación (solo lectura)
                 st.dataframe(
                     df_validos[['sku', 'Producto (Autocompletado)', 'cantidad']], 
                     use_container_width=True, 

@@ -42,7 +42,6 @@ supabase = init_connection()
 opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "GOATE"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 
-# SEPARACIÓN DE ESTADOS (POKA-YOKE VISUAL)
 opciones_estado_general = ["POR ARMAR", "ARMADO", "EN RUTA", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
 opciones_estado_todas = ["POR ARMAR", "ARMADO", "EN RUTA", "POR RECOGER", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
 
@@ -83,6 +82,22 @@ def procesar_fecha(valor):
     if hasattr(valor, 'strftime'):
         return valor.strftime("%d/%m/%Y")
     return str(valor)
+
+# NUEVA FUNCIÓN: El Cerebro Híbrido de Devoluciones
+def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, producto_str):
+    if estado_antiguo in ["POR ARMAR", "ARMADO", "REPROGRAMADO"] and estado_nuevo == "ANULADO":
+        # Caso 1: Estaba en el local y se anuló. ¡Devolvemos el stock automático!
+        datos_inv = descargar_datos_seguros("inventario")
+        if datos_inv:
+            inventario_db = {item['sku']: item for item in datos_inv}
+            articulos = decodificar_productos(producto_str)
+            for art in articulos:
+                if art['sku'] in inventario_db:
+                    stock_actual = inventario_db[art['sku']]['stock_actual']
+                    nuevo_stock = stock_actual + art['cant']
+                    supabase.table("inventario").update({"stock_actual": nuevo_stock}).eq("sku", art['sku']).execute()
+        return True # Indica que hizo devolución automática
+    return False # No hizo nada extra
 
 st.title("📦 Panel de Control Operativo")
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -246,10 +261,8 @@ with tab2:
                                 btn_masivo = st.button("Aplicar a", key=f"btn_masivo_{medio}", use_container_width=True)
                             
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
-                            
                             df_medio.insert(0, '✔️', False)
                             
-                            # AQUÍ AGREGAMOS 'direccion' DESPUÉS DE 'monto'
                             columnas_mostrar = ['✔️', 'id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business', 'estado']
                             df_estilo = df_medio[columnas_mostrar].style.apply(resaltar_armado, axis=1)
                             
@@ -268,23 +281,42 @@ with tab2:
                                 seleccionados = df_rutas[df_rutas['✔️'] == True]
                                 if not seleccionados.empty:
                                     cambios = 0
+                                    auto_devueltos = 0
                                     for index, row in seleccionados.iterrows():
-                                        if row['estado'] != estado_masivo:
+                                        estado_anterior = df_medio.loc[index, 'estado']
+                                        if row['estado'] != estado_anterior:
+                                            # Verificamos si aplica regla híbrida de stock
+                                            hizo_devolucion = procesar_cambio_estado_con_stock(row['id_pedido'], estado_anterior, estado_masivo, row['producto'])
+                                            if hizo_devolucion: auto_devueltos += 1
+                                            
                                             supabase.table("pedidos").update({"estado": estado_masivo}).eq("id_pedido", row['id_pedido']).execute()
                                             cambios += 1
-                                    st.success(f"✅ {cambios} pedidos actualizados a {estado_masivo}.")
+                                    
+                                    mensaje = f"✅ {cambios} pedidos actualizados a {estado_masivo}."
+                                    if auto_devueltos > 0:
+                                        mensaje += f" 🔄 ¡El stock de {auto_devueltos} pedidos se devolvió automáticamente al almacén!"
+                                    st.success(mensaje)
                                     st.rerun()
                                 else:
                                     st.warning("⚠️ Primero marca la casilla '✔️' en los pedidos que deseas cambiar.")
                             
                             if st.button(f"Guardar Cambios Individuales - {medio}", key=f"btn_{medio}"):
                                 cambios = 0
+                                auto_devueltos = 0
                                 for index, row in df_rutas.iterrows():
-                                    if row['estado'] != df_medio.loc[index, 'estado']:
+                                    estado_anterior = df_medio.loc[index, 'estado']
+                                    if row['estado'] != estado_anterior:
+                                        hizo_devolucion = procesar_cambio_estado_con_stock(row['id_pedido'], estado_anterior, row['estado'], row['producto'])
+                                        if hizo_devolucion: auto_devueltos += 1
+                                        
                                         supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
                                         cambios += 1
+                                
                                 if cambios > 0:
-                                    st.success(f"✅ Se actualizaron {cambios} pedidos.")
+                                    mensaje = f"✅ Se actualizaron {cambios} pedidos."
+                                    if auto_devueltos > 0:
+                                        mensaje += f" 🔄 ¡Stock de {auto_devueltos} pedidos reingresado automáticamente!"
+                                    st.success(mensaje)
                                     st.rerun()
                         else:
                             st.markdown(f"<h3 style='margin-bottom: 5px;'>🚚 {medio}</h3>", unsafe_allow_html=True)
@@ -309,10 +341,22 @@ with tab3:
             )
             if st.button("💾 Guardar Ediciones"):
                 try:
-                    for _, row in df_editado_global.iterrows():
+                    cambios = 0
+                    auto_devueltos = 0
+                    for index, row in df_editado_global.iterrows():
+                        estado_anterior = df_editar.loc[index, 'estado']
+                        if row['estado'] != estado_anterior:
+                            hizo_devolucion = procesar_cambio_estado_con_stock(row['id_pedido'], estado_anterior, row['estado'], row['producto'])
+                            if hizo_devolucion: auto_devueltos += 1
+                        
                         registro_actualizado = row.to_dict()
                         supabase.table("pedidos").update(registro_actualizado).eq("id_pedido", row['id_pedido']).execute()
-                    st.success("✅ Cambios guardados.")
+                        cambios += 1
+                    
+                    mensaje = "✅ Cambios guardados."
+                    if auto_devueltos > 0:
+                        mensaje += f" 🔄 Stock reingresado automáticamente en anulaciones de almacén."
+                    st.success(mensaje)
                 except Exception as e:
                     st.error(f"❌ Error guardando: {e}")
         else:
@@ -429,7 +473,6 @@ with tab5:
                 
                 st.write(f"Mostrando **{len(df_prov)}** envíos en tránsito a provincia. Los pedidos marcados como 'ENTREGADO' desaparecerán automáticamente.")
                 
-                # AQUÍ TAMBIÉN AGREGAMOS 'direccion' DESPUÉS DE 'monto'
                 columnas_shalom = ['id_pedido', 'nombre', 'celular', 'monto', 'direccion', 'adelanto', 'deuda', 'clave', 'estado']
                 
                 df_rutas_shalom = st.data_editor(
@@ -447,13 +490,21 @@ with tab5:
                 
                 if st.button("💾 Guardar Cambios Shalom"):
                     cambios = 0
+                    auto_devueltos = 0
                     for index, row in df_rutas_shalom.iterrows():
-                        original_estado = df_prov.loc[index, 'estado']
-                        if row['estado'] != original_estado:
+                        estado_anterior = df_prov.loc[index, 'estado']
+                        if row['estado'] != estado_anterior:
+                            hizo_devolucion = procesar_cambio_estado_con_stock(row['id_pedido'], estado_anterior, row['estado'], row['producto'])
+                            if hizo_devolucion: auto_devueltos += 1
+                            
                             supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
                             cambios += 1
+                    
                     if cambios > 0:
-                        st.success(f"✅ Se actualizaron {cambios} pedidos de provincia.")
+                        mensaje = f"✅ Se actualizaron {cambios} pedidos de provincia."
+                        if auto_devueltos > 0:
+                            mensaje += f" 🔄 ¡Stock de {auto_devueltos} pedidos anulados reingresado automáticamente!"
+                        st.success(mensaje)
                         st.rerun()
             else:
                 st.info("Ruta limpia. No hay envíos pendientes de cobro/recojo en provincia.")
@@ -462,8 +513,8 @@ with tab5:
 
 # --- PESTAÑA 6: INGRESO DE MERCADERÍA ---
 with tab6:
-    st.header("📥 Ingreso de Mercadería (Reposición)")
-    st.write("Ingresa el SKU y la cantidad. El sistema buscará el nombre para que valides antes de sumar al stock.")
+    st.header("📥 Ingreso de Mercadería (Reposición y Devoluciones de Ruta)")
+    st.write("Ingresa el SKU y la cantidad de la mercadería que regresa físicamente al almacén.")
     
     if 'msg_exito_ingreso' in st.session_state:
         st.success(st.session_state['msg_exito_ingreso'])

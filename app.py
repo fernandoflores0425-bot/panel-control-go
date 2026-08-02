@@ -64,21 +64,22 @@ def decodificar_productos(producto_str):
             articulos.append({'sku': p, 'cant': 1})
     return articulos
 
-# NUEVO POKA-YOKE VISUAL: Colores para cada estado operativo
 def resaltar_estados(row):
     color = ''
     if row['estado'] == 'ARMADO':
-        color = 'background-color: #e8f5e9; color: black' # Verde suave
+        color = 'background-color: #e8f5e9; color: black'
     elif row['estado'] == 'EN RUTA':
-        color = 'background-color: #e3f2fd; color: black' # Azul suave
+        color = 'background-color: #e3f2fd; color: black'
     elif row['estado'] == 'ENTREGADO':
-        color = 'background-color: #cfd8dc; color: #546e7a' # Gris (Completado)
+        color = 'background-color: #cfd8dc; color: #546e7a'
     elif row['estado'] in ['ANULADO', 'DEVOLUCION']:
-        color = 'background-color: #ffebee; color: black' # Rojo suave
+        color = 'background-color: #ffebee; color: black'
     elif row['estado'] == 'REPROGRAMADO':
-        color = 'background-color: #fff3e0; color: black' # Naranja suave
+        color = 'background-color: #fff3e0; color: black'
     return [color] * len(row)
 
+# OPTIMIZACIÓN EXTREMA: Caché de Memoria para evitar lag al tipear
+@st.cache_data(show_spinner=False)
 def descargar_datos_seguros(nombre_tabla):
     try:
         respuesta = supabase.table(nombre_tabla).select("*").execute()
@@ -218,6 +219,8 @@ with tab1:
                     if alertas_stock:
                         st.session_state['msg_alertas'] = list(set(alertas_stock))
                     
+                    # Limpiamos el caché para obligar al sistema a descargar los datos frescos la próxima vez
+                    descargar_datos_seguros.clear()
                     st.session_state['limpiador_tab1'] += 1 
                     st.rerun() 
                         
@@ -238,7 +241,6 @@ with tab2:
         if df_todos.empty:
             st.info("Aún no hay pedidos registrados. Usa la Pestaña 1.")
         else:
-            # Filtros de fecha robustos
             def parse_dmy(d_str):
                 try: return datetime.datetime.strptime(str(d_str), "%d/%m/%Y")
                 except: return datetime.datetime.min
@@ -304,6 +306,8 @@ with tab2:
                                     if auto_devueltos > 0:
                                         mensaje += f" 🔄 ¡Stock de {auto_devueltos} pedidos reingresado automáticamente!"
                                     st.success(mensaje)
+                                    
+                                    descargar_datos_seguros.clear() # Limpiamos el caché
                                     st.rerun()
                         else:
                             st.markdown(f"<h3 style='margin-bottom: 5px;'>🚚 {medio}</h3>", unsafe_allow_html=True)
@@ -344,6 +348,8 @@ with tab3:
                     if auto_devueltos > 0:
                         mensaje += f" 🔄 Stock reingresado automáticamente en anulaciones de almacén."
                     st.success(mensaje)
+                    
+                    descargar_datos_seguros.clear() # Limpiamos el caché
                 except Exception as e:
                     st.error(f"❌ Error guardando: {e}")
         else:
@@ -384,6 +390,8 @@ with tab4:
                 registros_inv = df_inv_limpio.to_dict('records')
                 supabase.table("inventario").insert(registros_inv).execute()
                 st.success("✅ Inventario en la nube actualizado.")
+                
+                descargar_datos_seguros.clear() # Limpiamos el caché
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ Error al guardar inventario: {e}")
@@ -492,6 +500,8 @@ with tab5:
                         if auto_devueltos > 0:
                             mensaje += f" 🔄 ¡Stock de {auto_devueltos} pedidos anulados reingresado automáticamente!"
                         st.success(mensaje)
+                        
+                        descargar_datos_seguros.clear() # Limpiamos el caché
                         st.rerun()
             else:
                 st.info("Ruta limpia. No hay envíos pendientes de cobro/recojo en provincia.")
@@ -570,6 +580,8 @@ with tab6:
                                 supabase.table("inventario").update({"stock_actual": nuevo_stock}).eq("sku", sku_ingreso).execute()
                             
                             st.session_state['msg_exito_ingreso'] = f"✅ ¡Se sumó el stock de {len(df_validos)} productos correctamente!"
+                            
+                            descargar_datos_seguros.clear() # Limpiamos el caché
                             st.session_state['limpiador_ingreso'] += 1
                             st.rerun()
                         except Exception as e:

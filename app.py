@@ -238,7 +238,7 @@ with tab2:
         if df_todos.empty:
             st.info("Aún no hay pedidos registrados. Usa la Pestaña 1.")
         else:
-            # LÓGICA ACTUALIZADA DE FECHAS: Extrae todas las fechas de manera segura y centra en 'hoy'
+            # Filtros de fecha robustos
             def parse_dmy(d_str):
                 try: return datetime.datetime.strptime(str(d_str), "%d/%m/%Y")
                 except: return datetime.datetime.min
@@ -262,7 +262,6 @@ with tab2:
                 for i, medio in enumerate(medios_seleccionados):
                     with columnas[i % 2]:
                         
-                        # NUEVO FILTRO: Toma TODOS los estados del día + Los Reprogramados de cualquier día
                         filtro_medio = df_todos['medio'] == medio
                         filtro_fecha = (df_todos['fecha_entrega'] == fecha_filtro) | (df_todos['estado'] == "REPROGRAMADO")
                         df_medio = df_todos[filtro_medio & filtro_fecha].copy()
@@ -271,19 +270,11 @@ with tab2:
                             total_pedidos = len(df_medio)
                             pedidos_armados = len(df_medio[df_medio['estado'] == 'ARMADO'])
                             
-                            col_titulo, col_espacio, col_select, col_btn = st.columns([6, 1, 3, 1.5])
-                            with col_titulo:
-                                st.markdown(f"<h3 style='margin-bottom: 5px; margin-top: 10px;'>🚚 {medio} <span style='font-size: 16px; font-weight: normal; color: #888;'>({pedidos_armados} de {total_pedidos} listos)</span></h3>", unsafe_allow_html=True)
-                            with col_select:
-                                estado_masivo = st.selectbox("Cambio", opciones_estado_general, key=f"sel_masivo_{medio}", label_visibility="collapsed")
-                            with col_btn:
-                                btn_masivo = st.button("Aplicar a", key=f"btn_masivo_{medio}", use_container_width=True)
+                            st.markdown(f"<h3 style='margin-bottom: 5px; margin-top: 10px;'>🚚 {medio} <span style='font-size: 16px; font-weight: normal; color: #888;'>({pedidos_armados} de {total_pedidos} listos)</span></h3>", unsafe_allow_html=True)
                             
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
-                            df_medio.insert(0, '✔️', False)
                             
-                            # Aplicamos la nueva función de color (resaltar_estados)
-                            columnas_mostrar = ['✔️', 'id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business', 'estado']
+                            columnas_mostrar = ['id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business', 'estado']
                             df_estilo = df_medio[columnas_mostrar].style.apply(resaltar_estados, axis=1)
                             
                             df_rutas = st.data_editor(
@@ -291,35 +282,12 @@ with tab2:
                                 key=f"editor_{medio}", 
                                 disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "direccion", "producto", "business"], 
                                 column_config={
-                                    "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general, required=True),
-                                    "✔️": st.column_config.CheckboxColumn("✔️", default=False, width="small")
+                                    "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general, required=True)
                                 }, 
                                 use_container_width=True, hide_index=True
                             )
                             
-                            if btn_masivo:
-                                seleccionados = df_rutas[df_rutas['✔️'] == True]
-                                if not seleccionados.empty:
-                                    cambios = 0
-                                    auto_devueltos = 0
-                                    for index, row in seleccionados.iterrows():
-                                        estado_anterior = df_medio.loc[index, 'estado']
-                                        if row['estado'] != estado_anterior:
-                                            hizo_devolucion = procesar_cambio_estado_con_stock(row['id_pedido'], estado_anterior, estado_masivo, row['producto'])
-                                            if hizo_devolucion: auto_devueltos += 1
-                                            
-                                            supabase.table("pedidos").update({"estado": estado_masivo}).eq("id_pedido", row['id_pedido']).execute()
-                                            cambios += 1
-                                    
-                                    mensaje = f"✅ {cambios} pedidos actualizados a {estado_masivo}."
-                                    if auto_devueltos > 0:
-                                        mensaje += f" 🔄 ¡El stock de {auto_devueltos} pedidos se devolvió automáticamente al almacén!"
-                                    st.success(mensaje)
-                                    st.rerun()
-                                else:
-                                    st.warning("⚠️ Primero marca la casilla '✔️' en los pedidos que deseas cambiar.")
-                            
-                            if st.button(f"Guardar Cambios Individuales - {medio}", key=f"btn_{medio}"):
+                            if st.button(f"Guardar Cambios - {medio}", key=f"btn_{medio}"):
                                 cambios = 0
                                 auto_devueltos = 0
                                 for index, row in df_rutas.iterrows():

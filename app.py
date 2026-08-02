@@ -78,7 +78,6 @@ def resaltar_estados(row):
         color = 'background-color: #fff3e0; color: black'
     return [color] * len(row)
 
-# OPTIMIZACIÓN EXTREMA: Caché de Memoria para evitar lag al tipear
 @st.cache_data(show_spinner=False)
 def descargar_datos_seguros(nombre_tabla):
     try:
@@ -219,7 +218,6 @@ with tab1:
                     if alertas_stock:
                         st.session_state['msg_alertas'] = list(set(alertas_stock))
                     
-                    # Limpiamos el caché para obligar al sistema a descargar los datos frescos la próxima vez
                     descargar_datos_seguros.clear()
                     st.session_state['limpiador_tab1'] += 1 
                     st.rerun() 
@@ -270,7 +268,9 @@ with tab2:
                         
                         if not df_medio.empty:
                             total_pedidos = len(df_medio)
-                            pedidos_armados = len(df_medio[df_medio['estado'] == 'ARMADO'])
+                            # NUEVA FÓRMULA DE PROGRESO: Considera listos todos los empaquetados, despachados y entregados
+                            estados_listos = ['ARMADO', 'EN RUTA', 'ENTREGADO']
+                            pedidos_armados = len(df_medio[df_medio['estado'].isin(estados_listos)])
                             
                             st.markdown(f"<h3 style='margin-bottom: 5px; margin-top: 10px;'>🚚 {medio} <span style='font-size: 16px; font-weight: normal; color: #888;'>({pedidos_armados} de {total_pedidos} listos)</span></h3>", unsafe_allow_html=True)
                             
@@ -307,7 +307,7 @@ with tab2:
                                         mensaje += f" 🔄 ¡Stock de {auto_devueltos} pedidos reingresado automáticamente!"
                                     st.success(mensaje)
                                     
-                                    descargar_datos_seguros.clear() # Limpiamos el caché
+                                    descargar_datos_seguros.clear() 
                                     st.rerun()
                         else:
                             st.markdown(f"<h3 style='margin-bottom: 5px;'>🚚 {medio}</h3>", unsafe_allow_html=True)
@@ -349,7 +349,7 @@ with tab3:
                         mensaje += f" 🔄 Stock reingresado automáticamente en anulaciones de almacén."
                     st.success(mensaje)
                     
-                    descargar_datos_seguros.clear() # Limpiamos el caché
+                    descargar_datos_seguros.clear()
                 except Exception as e:
                     st.error(f"❌ Error guardando: {e}")
         else:
@@ -391,7 +391,7 @@ with tab4:
                 supabase.table("inventario").insert(registros_inv).execute()
                 st.success("✅ Inventario en la nube actualizado.")
                 
-                descargar_datos_seguros.clear() # Limpiamos el caché
+                descargar_datos_seguros.clear() 
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ Error al guardar inventario: {e}")
@@ -501,7 +501,7 @@ with tab5:
                             mensaje += f" 🔄 ¡Stock de {auto_devueltos} pedidos anulados reingresado automáticamente!"
                         st.success(mensaje)
                         
-                        descargar_datos_seguros.clear() # Limpiamos el caché
+                        descargar_datos_seguros.clear()
                         st.rerun()
             else:
                 st.info("Ruta limpia. No hay envíos pendientes de cobro/recojo en provincia.")
@@ -581,7 +581,7 @@ with tab6:
                             
                             st.session_state['msg_exito_ingreso'] = f"✅ ¡Se sumó el stock de {len(df_validos)} productos correctamente!"
                             
-                            descargar_datos_seguros.clear() # Limpiamos el caché
+                            descargar_datos_seguros.clear() 
                             st.session_state['limpiador_ingreso'] += 1
                             st.rerun()
                         except Exception as e:

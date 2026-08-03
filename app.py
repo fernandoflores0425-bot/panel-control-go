@@ -108,6 +108,11 @@ def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, pr
         return True 
     return False
 
+# NUEVA FUNCIÓN: Ordenamiento Natural Alfanumérico
+def clave_orden_natural(sku):
+    # Divide "CAR10" en ["CAR", 10] para comparar lógicamente
+    return [int(texto) if texto.isdigit() else texto.lower() for texto in re.split(r'(\d+)', str(sku))]
+
 st.title("📦 Panel de Control Operativo")
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📝 Agendar Pedidos", "🚚 Rutas por Día", "✏️ Editar Pedidos", 
@@ -367,7 +372,6 @@ with tab3:
                         st.error(f"❌ Error guardando: {e}")
             
             with col_borrar:
-                # Botón de eliminación simple
                 if st.button("🗑️ Eliminar Seleccionados", use_container_width=True):
                     seleccionados = df_editado_global[df_editado_global['🗑️ Eliminar'] == True]
                     if not seleccionados.empty:
@@ -375,7 +379,6 @@ with tab3:
                             eliminados = 0
                             
                             for index, row in seleccionados.iterrows():
-                                # Solo borramos la fila, sin hacer matemática de inventario
                                 supabase.table("pedidos").delete().eq("id_pedido", row['id_pedido']).execute()
                                 eliminados += 1
                                 
@@ -398,7 +401,11 @@ with tab4:
         df_inv = pd.DataFrame(datos_inv_full)
         if df_inv.empty:
             df_inv = pd.DataFrame(index=range(10), columns=["nombre", "sku", "stock_actual", "precio", "stock_minimo", "stock_ideal"])
-        
+        else:
+            # APLICAMOS EL ORDENAMIENTO ALFANUMÉRICO ANTES DE MOSTRAR
+            df_inv['sku'] = df_inv['sku'].fillna('')
+            df_inv = df_inv.sort_values(by='sku', key=lambda col: col.map(clave_orden_natural)).reset_index(drop=True)
+            
         df_inv_editado = st.data_editor(
             df_inv, num_rows="dynamic",
             column_config={

@@ -268,7 +268,6 @@ with tab2:
                         
                         if not df_medio.empty:
                             total_pedidos = len(df_medio)
-                            # NUEVA FÓRMULA DE PROGRESO: Considera listos todos los empaquetados, despachados y entregados
                             estados_listos = ['ARMADO', 'EN RUTA', 'ENTREGADO']
                             pedidos_armados = len(df_medio[df_medio['estado'].isin(estados_listos)])
                             
@@ -321,37 +320,72 @@ with tab3:
     if datos_edicion is not None:
         df_editar = pd.DataFrame(datos_edicion)
         if not df_editar.empty:
-            busqueda = st.text_input("🔍 Buscar pedido:")
+            busqueda = st.text_input("🔍 Buscar pedido (puedes buscar por nombre, id o fecha):")
             if busqueda:
                 df_editar = df_editar[df_editar.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)]
             
+            df_editar.insert(0, '🗑️ Eliminar', False)
+            
+            st.write("Realiza modificaciones o selecciona pedidos para borrarlos del sistema:")
             df_editado_global = st.data_editor(
-                df_editar.head(20), 
+                df_editar.head(30), 
                 use_container_width=True, hide_index=True, disabled=["id_pedido"],
-                column_config={"medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas)}
+                column_config={
+                    "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), 
+                    "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas),
+                    "🗑️ Eliminar": st.column_config.CheckboxColumn("🗑️ Eliminar", default=False, width="small")
+                }
             )
-            if st.button("💾 Guardar Ediciones"):
-                try:
-                    cambios = 0
-                    auto_devueltos = 0
-                    for index, row in df_editado_global.iterrows():
-                        estado_anterior = df_editar.loc[index, 'estado']
-                        if row['estado'] != estado_anterior:
-                            hizo_devolucion = procesar_cambio_estado_con_stock(row['id_pedido'], estado_anterior, row['estado'], row['producto'])
-                            if hizo_devolucion: auto_devueltos += 1
+            
+            col_guardar, col_borrar = st.columns(2)
+            
+            with col_guardar:
+                if st.button("💾 Guardar Ediciones", use_container_width=True):
+                    try:
+                        cambios = 0
+                        auto_devueltos = 0
+                        for index, row in df_editado_global.iterrows():
+                            if row['🗑️ Eliminar']: continue
+                            
+                            estado_anterior = df_editar.loc[index, 'estado']
+                            if row['estado'] != estado_anterior:
+                                hizo_devolucion = procesar_cambio_estado_con_stock(row['id_pedido'], estado_anterior, row['estado'], row['producto'])
+                                if hizo_devolucion: auto_devueltos += 1
+                            
+                            registro_actualizado = row.drop('🗑️ Eliminar').to_dict()
+                            supabase.table("pedidos").update(registro_actualizado).eq("id_pedido", row['id_pedido']).execute()
+                            cambios += 1
                         
-                        registro_actualizado = row.to_dict()
-                        supabase.table("pedidos").update(registro_actualizado).eq("id_pedido", row['id_pedido']).execute()
-                        cambios += 1
-                    
-                    mensaje = "✅ Cambios guardados."
-                    if auto_devueltos > 0:
-                        mensaje += f" 🔄 Stock reingresado automáticamente en anulaciones de almacén."
-                    st.success(mensaje)
-                    
-                    descargar_datos_seguros.clear()
-                except Exception as e:
-                    st.error(f"❌ Error guardando: {e}")
+                        mensaje = f"✅ {cambios} ediciones guardadas."
+                        if auto_devueltos > 0:
+                            mensaje += f" 🔄 Stock reingresado en anulaciones de almacén."
+                        st.success(mensaje)
+                        
+                        descargar_datos_seguros.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error guardando: {e}")
+            
+            with col_borrar:
+                # Botón de eliminación simple
+                if st.button("🗑️ Eliminar Seleccionados", use_container_width=True):
+                    seleccionados = df_editado_global[df_editado_global['🗑️ Eliminar'] == True]
+                    if not seleccionados.empty:
+                        try:
+                            eliminados = 0
+                            
+                            for index, row in seleccionados.iterrows():
+                                # Solo borramos la fila, sin hacer matemática de inventario
+                                supabase.table("pedidos").delete().eq("id_pedido", row['id_pedido']).execute()
+                                eliminados += 1
+                                
+                            st.success(f"✅ ¡{eliminados} pedidos eliminados permanentemente del sistema!")
+                            descargar_datos_seguros.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error eliminando pedidos: {e}")
+                    else:
+                        st.warning("⚠️ Primero marca la casilla '🗑️ Eliminar' en los pedidos que te equivocaste.")
         else:
             st.info("No hay pedidos para editar.")
 

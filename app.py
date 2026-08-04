@@ -90,12 +90,23 @@ def descargar_datos_seguros(nombre_tabla):
         st.error(f"❌ ERROR CRÍTICO: No se pudo leer la tabla '{nombre_tabla}'. Detalle: {e}")
         return None
 
+# NUEVO MOTOR DE FECHAS YYYY-MM-DD
 def procesar_fecha(valor):
     if pd.isna(valor) or valor == "":
         return ""
     if hasattr(valor, 'strftime'):
-        return valor.strftime("%d/%m/%Y")
-    return str(valor)
+        return valor.strftime("%Y-%m-%d")
+    return str(valor).strip()
+
+def parse_fecha(d_str):
+    d_str = str(d_str).strip()
+    try:
+        return datetime.datetime.strptime(d_str, "%Y-%m-%d")
+    except:
+        try:
+            return datetime.datetime.strptime(d_str, "%d/%m/%Y")
+        except:
+            return datetime.datetime.min
 
 def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, producto_str):
     if estado_antiguo in ["POR ARMAR", "ARMADO", "REPROGRAMADO"] and estado_nuevo == "ANULADO":
@@ -114,17 +125,21 @@ def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, pr
 def clave_orden_natural(sku):
     return [int(texto) if texto.isdigit() else texto.lower() for texto in re.split(r'(\d+)', str(sku))]
 
+# Hora actual en Perú configurada en formato Año-Mes-Día
+def obtener_fecha_peru(formato="%Y-%m-%d"):
+    hora_peru = datetime.datetime.utcnow() - datetime.timedelta(hours=5)
+    return hora_peru.strftime(formato)
+
 st.title("📦 Panel de Control Operativo")
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📝 Agendar Pedidos", "🚚 Rutas por Día", "✏️ Editar Pedidos", 
-    "📊 Maestro de Inventario", "📦 Shalom (Provincias)", "📥 Ingreso Mercadería"
+    "📊 Maestro de Inventario", "📦 Shalom (Provincias)", "📥 Ingreso Mercadería", "📈 Resumen del Día"
 ])
 
-# --- PESTAÑA 1: AGENDAR (SISTEMA DE SEGREGACIÓN) ---
+# --- PESTAÑA 1: AGENDAR ---
 with tab1:
     st.header("Ingreso de ventas")
     
-    # Manejo de alertas y mensajes
     if 'msg_exito' in st.session_state:
         st.success(st.session_state['msg_exito'])
         del st.session_state['msg_exito']
@@ -141,7 +156,6 @@ with tab1:
     
     columnas_base = ["fecha_pedido", "fecha_entrega", "nombre", "celular", "distrito", "medio", "monto", "direccion", "producto", "business", "observaciones"]
     
-    # Si quedaron filas con error del intento anterior, las ponemos arriba para que el usuario las corrija
     if st.session_state['filas_erroneas']:
         df_previo = pd.DataFrame(st.session_state['filas_erroneas'])[columnas_base]
         df_vacias = pd.DataFrame(index=range(10), columns=columnas_base)
@@ -154,8 +168,8 @@ with tab1:
         num_rows="dynamic",
         key=f"editor_pedidos_{st.session_state['limpiador_tab1']}",
         column_config={
-            "fecha_pedido": st.column_config.DateColumn("Fecha Pedido", format="DD/MM/YYYY"),
-            "fecha_entrega": st.column_config.DateColumn("Fecha Entrega", format="DD/MM/YYYY"),
+            "fecha_pedido": st.column_config.DateColumn("Fecha Pedido", format="YYYY-MM-DD"),
+            "fecha_entrega": st.column_config.DateColumn("Fecha Entrega", format="YYYY-MM-DD"),
             "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio),
             "monto": st.column_config.NumberColumn("Monto", format="S/ %.2f"),
             "business": st.column_config.SelectboxColumn("Business", options=opciones_business),
@@ -174,24 +188,21 @@ with tab1:
             inventario_db = {item['sku']: item for item in datos_inv}
             
             pedidos_a_guardar = []
-            pedidos_malos_df = [] # Aquí almacenamos las filas que rebotan
+            pedidos_malos_df = [] 
             alertas_stock = []
             errores_registro = []
             
-            # Clasificadora Inteligente
             for index, row in df_limpio.iterrows():
                 nombre = str(row['nombre']).strip()
                 medio = str(row['medio']).strip() if pd.notna(row['medio']) else ""
                 business = str(row['business']).strip() if pd.notna(row['business']) else ""
                 producto = str(row['producto']).strip()
                 
-                # Candado 1: Faltan Datos Obligatorios
                 if medio == "" or business == "":
                     errores_registro.append(f"❌ **{nombre}**: Rechazado. Faltó seleccionar el Medio o el Business.")
                     pedidos_malos_df.append(row.to_dict())
                     continue
                 
-                # Candado 2: Validación de SKUs
                 articulos_pedidos = decodificar_productos(producto)
                 skus_invalidos = [art['sku'] for art in articulos_pedidos if art['sku'] not in inventario_db]
                 
@@ -200,14 +211,11 @@ with tab1:
                     pedidos_malos_df.append(row.to_dict())
                     continue
                 
-                # Si pasa las pruebas, se va a guardar
                 pedidos_a_guardar.append(row)
                 
-                # Simulamos descuento en memoria para evitar errores si piden varios del mismo producto
                 for art in articulos_pedidos:
                     inventario_db[art['sku']]['stock_actual'] -= art['cant']
             
-            # Procesamos solo los pedidos que pasaron la validación
             if pedidos_a_guardar:
                 datos_pedidos = descargar_datos_seguros("pedidos")
                 ultimo_numero = 1000
@@ -235,10 +243,8 @@ with tab1:
                     })
                 
                 try:
-                    # Guardamos en la nube
                     supabase.table("pedidos").insert(nuevos_registros).execute()
                     
-                    # Consolidamos el descuento de inventario
                     skus_actualizados = set()
                     for row in pedidos_a_guardar:
                         for art in decodificar_productos(row['producto']):
@@ -259,10 +265,9 @@ with tab1:
                 except Exception as e:
                     st.error(f"❌ Error al guardar en la nube: {e}")
                     
-            # Refrescamos la memoria del panel
             st.session_state['msg_errores'] = errores_registro
             st.session_state['msg_alertas'] = alertas_stock
-            st.session_state['filas_erroneas'] = pedidos_malos_df # Le pasamos las filas malas al sistema para que las muestre
+            st.session_state['filas_erroneas'] = pedidos_malos_df 
             
             descargar_datos_seguros.clear()
             st.session_state['limpiador_tab1'] += 1 
@@ -282,17 +287,13 @@ with tab2:
         if df_todos.empty:
             st.info("Aún no hay pedidos registrados. Usa la Pestaña 1.")
         else:
-            def parse_dmy(d_str):
-                try: return datetime.datetime.strptime(str(d_str), "%d/%m/%Y")
-                except: return datetime.datetime.min
-
             fechas_validas = [d for d in df_todos['fecha_entrega'].dropna().unique() if str(d).strip() != ""]
-            lista_fechas = sorted(fechas_validas, key=parse_dmy)
-            hoy_str = datetime.datetime.now().strftime("%d/%m/%Y")
+            lista_fechas = sorted(fechas_validas, key=parse_fecha)
+            hoy_str = obtener_fecha_peru()
             
             if hoy_str not in lista_fechas:
                 lista_fechas.append(hoy_str)
-                lista_fechas = sorted(lista_fechas, key=parse_dmy)
+                lista_fechas = sorted(lista_fechas, key=parse_fecha)
                 
             try: index_hoy = lista_fechas.index(hoy_str)
             except: index_hoy = len(lista_fechas) - 1
@@ -410,7 +411,6 @@ with tab3:
                         st.error(f"❌ Error guardando: {e}")
             
             with col_borrar:
-                # Botón de eliminación simple
                 if st.button("🗑️ Eliminar Seleccionados", use_container_width=True):
                     seleccionados = df_editado_global[df_editado_global['🗑️ Eliminar'] == True]
                     if not seleccionados.empty:
@@ -441,7 +441,6 @@ with tab4:
         if df_inv.empty:
             df_inv = pd.DataFrame(index=range(10), columns=["nombre", "sku", "stock_actual", "precio", "stock_minimo", "stock_ideal"])
         else:
-            # APLICAMOS EL ORDENAMIENTO ALFANUMÉRICO ANTES DE MOSTRAR
             df_inv['sku'] = df_inv['sku'].fillna('')
             df_inv = df_inv.sort_values(by='sku', key=lambda col: col.map(clave_orden_natural)).reset_index(drop=True)
             
@@ -668,3 +667,82 @@ with tab6:
                             st.error(f"❌ Error al sumar stock: {e}")
             else:
                 st.info("Comienza a escribir a la izquierda para ver los nombres aquí.")
+
+# --- PESTAÑA 7: RESUMEN DEL DÍA ---
+with tab7:
+    st.header("📈 Resumen del Día")
+    
+    datos_pedidos = descargar_datos_seguros("pedidos")
+    datos_inv = descargar_datos_seguros("inventario")
+    
+    if datos_pedidos is not None and datos_inv is not None:
+        df_ped = pd.DataFrame(datos_pedidos)
+        df_inv = pd.DataFrame(datos_inv)
+        
+        hoy_str = obtener_fecha_peru()
+        
+        col_fecha, col_refresh = st.columns([8, 2])
+        with col_fecha:
+            st.markdown(f"### 📅 Fecha de Operación: **{hoy_str}**")
+        with col_refresh:
+            if st.button("🔄 Actualizar Datos"):
+                descargar_datos_seguros.clear()
+                st.rerun()
+        
+        if not df_ped.empty:
+            df_hoy = df_ped[(df_ped['fecha_pedido'] == hoy_str) & (~df_ped['estado'].isin(["ANULADO", "DEVOLUCION"]))]
+            
+            total_pedidos = len(df_hoy)
+            
+            st.metric(label="📦 Total de Pedidos Efectivos Hoy", value=total_pedidos)
+            
+            if total_pedidos > 0:
+                st.markdown("---")
+                st.subheader("📊 Consumo de Inventario del Día")
+                
+                ventas_skus = {}
+                for prod_str in df_hoy['producto']:
+                    articulos = decodificar_productos(prod_str)
+                    for art in articulos:
+                        sku = art['sku']
+                        cant = art['cant']
+                        if sku in ventas_skus:
+                            ventas_skus[sku] += cant
+                        else:
+                            ventas_skus[sku] = cant
+                            
+                if ventas_skus:
+                    reporte = []
+                    inv_dict = {item['sku']: item for item in datos_inv}
+                    
+                    for sku, cant_vendida in ventas_skus.items():
+                        if sku in inv_dict:
+                            nombre = inv_dict[sku]['nombre']
+                            stock_final = inv_dict[sku]['stock_actual']
+                            stock_inicial = stock_final + cant_vendida
+                        else:
+                            nombre = "⚠️ SKU NO ENCONTRADO"
+                            stock_final = 0
+                            stock_inicial = cant_vendida
+                            
+                        reporte.append({
+                            "SKU": sku,
+                            "Producto": nombre,
+                            "Stock Inicial (Aprox)": stock_inicial,
+                            "Unidades Vendidas": cant_vendida,
+                            "Stock Final (Actual)": stock_final
+                        })
+                        
+                    df_reporte = pd.DataFrame(reporte)
+                    df_reporte = df_reporte.sort_values(by="Unidades Vendidas", ascending=False).reset_index(drop=True)
+                    
+                    st.dataframe(df_reporte, use_container_width=True)
+                    st.caption("ℹ️ *Nota: El 'Stock Inicial' es una aproximación calculada sumando tu stock actual más las ventas efectivas de hoy.*")
+                else:
+                    st.info("Hoy se registraron pedidos, pero no contienen productos válidos o están mal escritos.")
+            else:
+                st.info("No hay ventas efectivas registradas para el día de hoy.")
+        else:
+            st.info("No hay pedidos en la base de datos.")
+    else:
+        st.warning("No se pudo cargar la información para el resumen.")

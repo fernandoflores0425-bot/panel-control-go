@@ -13,6 +13,9 @@ if 'limpiador_tab1' not in st.session_state:
 if 'limpiador_ingreso' not in st.session_state:
     st.session_state['limpiador_ingreso'] = 0
 
+if 'filas_erroneas' not in st.session_state:
+    st.session_state['filas_erroneas'] = []
+
 st.markdown("""
     <style>
     .stButton>button {
@@ -31,7 +34,6 @@ def init_connection():
     try:
         url = st.secrets["SUPABASE_URL"].strip()
         key = st.secrets["SUPABASE_KEY"].strip()
-        # Se agrega un timeout nativo por debajo si la librería lo soporta
         return create_client(url, key)
     except Exception as e:
         st.error(f"❌ Error leyendo los Secrets: {e}")
@@ -40,7 +42,7 @@ def init_connection():
 supabase = init_connection()
 
 # --- 3. VARIABLES GLOBALES Y FUNCIONES ---
-opciones_medio = ["MD", "FERRA", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "GOATE"]
+opciones_medio = ["MD", "ENTRE GO 2", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "ENTREGATE"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 
 opciones_estado_general = ["POR ARMAR", "ARMADO", "EN RUTA", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
@@ -79,9 +81,6 @@ def resaltar_estados(row):
         color = 'background-color: #fff3e0; color: black'
     return [color] * len(row)
 
-# OPTIMIZACIÓN EXTREMA ANTI-LAG: 
-# ttl=300 significa que los datos duran máximo 5 minutos en memoria, evitando saturación.
-# max_entries=10 evita que se acumulen múltiples historiales pesados.
 @st.cache_data(show_spinner=False, ttl=300, max_entries=10)
 def descargar_datos_seguros(nombre_tabla):
     try:
@@ -121,13 +120,18 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📊 Maestro de Inventario", "📦 Shalom (Provincias)", "📥 Ingreso Mercadería"
 ])
 
-# --- PESTAÑA 1: AGENDAR ---
+# --- PESTAÑA 1: AGENDAR (SISTEMA DE SEGREGACIÓN) ---
 with tab1:
     st.header("Ingreso de ventas")
     
+    # Manejo de alertas y mensajes
     if 'msg_exito' in st.session_state:
         st.success(st.session_state['msg_exito'])
         del st.session_state['msg_exito']
+    if 'msg_errores' in st.session_state:
+        for error in st.session_state['msg_errores']:
+            st.error(error)
+        del st.session_state['msg_errores']
     if 'msg_alertas' in st.session_state:
         for alerta in st.session_state['msg_alertas']:
             st.warning(alerta)
@@ -135,10 +139,15 @@ with tab1:
 
     st.write("Copia de tu Excel y pega directo en la primera celda.")
     
-    df_base = pd.DataFrame(index=range(15), columns=[
-        "fecha_pedido", "fecha_entrega", "nombre", "celular", 
-        "distrito", "medio", "monto", "direccion", "producto", "business", "observaciones"
-    ])
+    columnas_base = ["fecha_pedido", "fecha_entrega", "nombre", "celular", "distrito", "medio", "monto", "direccion", "producto", "business", "observaciones"]
+    
+    # Si quedaron filas con error del intento anterior, las ponemos arriba para que el usuario las corrija
+    if st.session_state['filas_erroneas']:
+        df_previo = pd.DataFrame(st.session_state['filas_erroneas'])[columnas_base]
+        df_vacias = pd.DataFrame(index=range(10), columns=columnas_base)
+        df_base = pd.concat([df_previo, df_vacias], ignore_index=True)
+    else:
+        df_base = pd.DataFrame(index=range(15), columns=columnas_base)
     
     df_editado = st.data_editor(
         df_base, 
@@ -163,42 +172,51 @@ with tab1:
                 st.stop()
                 
             inventario_db = {item['sku']: item for item in datos_inv}
-            error_bloqueante = False
-            operaciones_descuento = []
+            
+            pedidos_a_guardar = []
+            pedidos_malos_df = [] # Aquí almacenamos las filas que rebotan
             alertas_stock = []
+            errores_registro = []
             
+            # Clasificadora Inteligente
             for index, row in df_limpio.iterrows():
-                articulos_pedidos = decodificar_productos(row['producto'])
-                for art in articulos_pedidos:
-                    if art['sku'] not in inventario_db:
-                        st.error(f"❌ ERROR: El producto '{art['sku']}' NO existe en el Inventario.")
-                        error_bloqueante = True
-                        break
-                    else:
-                        item_inv = inventario_db[art['sku']]
-                        stock_actual = item_inv['stock_actual']
-                        stock_minimo = item_inv.get('stock_minimo', 0)
-                        nuevo_stock = stock_actual - art['cant']
-                        
-                        operaciones_descuento.append({'sku': art['sku'], 'nuevo_stock': nuevo_stock})
-                        
-                        if nuevo_stock < 0:
-                            alertas_stock.append(f"⚠️ Atención: '{art['sku']}' quedó con stock negativo ({nuevo_stock}).")
-                        elif nuevo_stock <= stock_minimo:
-                            alertas_stock.append(f"🔔 Alerta: '{art['sku']}' llegó a su límite. Quedan {nuevo_stock} unidades.")
-            
-            if not error_bloqueante:
-                datos_pedidos = descargar_datos_seguros("pedidos")
-                if datos_pedidos is None:
-                    st.stop()
+                nombre = str(row['nombre']).strip()
+                medio = str(row['medio']).strip() if pd.notna(row['medio']) else ""
+                business = str(row['business']).strip() if pd.notna(row['business']) else ""
+                producto = str(row['producto']).strip()
                 
+                # Candado 1: Faltan Datos Obligatorios
+                if medio == "" or business == "":
+                    errores_registro.append(f"❌ **{nombre}**: Rechazado. Faltó seleccionar el Medio o el Business.")
+                    pedidos_malos_df.append(row.to_dict())
+                    continue
+                
+                # Candado 2: Validación de SKUs
+                articulos_pedidos = decodificar_productos(producto)
+                skus_invalidos = [art['sku'] for art in articulos_pedidos if art['sku'] not in inventario_db]
+                
+                if skus_invalidos:
+                    errores_registro.append(f"❌ **{nombre}**: Rechazado. El SKU no existe ({', '.join(skus_invalidos)}).")
+                    pedidos_malos_df.append(row.to_dict())
+                    continue
+                
+                # Si pasa las pruebas, se va a guardar
+                pedidos_a_guardar.append(row)
+                
+                # Simulamos descuento en memoria para evitar errores si piden varios del mismo producto
+                for art in articulos_pedidos:
+                    inventario_db[art['sku']]['stock_actual'] -= art['cant']
+            
+            # Procesamos solo los pedidos que pasaron la validación
+            if pedidos_a_guardar:
+                datos_pedidos = descargar_datos_seguros("pedidos")
                 ultimo_numero = 1000
                 if datos_pedidos:
                     ids = [int(p['id_pedido'].replace("CG-", "")) for p in datos_pedidos if p['id_pedido'].startswith("CG-")]
                     if ids: ultimo_numero = max(ids)
                 
                 nuevos_registros = []
-                for _, row in df_limpio.iterrows():
+                for row in pedidos_a_guardar:
                     ultimo_numero += 1
                     nuevos_registros.append({
                         "id_pedido": f"CG-{ultimo_numero}",
@@ -209,7 +227,7 @@ with tab1:
                         "distrito": str(row['distrito']),
                         "medio": str(row['medio']),
                         "monto": float(row['monto']) if pd.notna(row['monto']) else 0.0,
-                        "direccion": str(row['direccion']),
+                        "direccion": str(row['direccion']) if pd.notna(row['direccion']) else "",
                         "producto": str(row['producto']),
                         "business": str(row['business']),
                         "observaciones": str(row['observaciones']) if pd.notna(row['observaciones']) else "",
@@ -217,20 +235,38 @@ with tab1:
                     })
                 
                 try:
+                    # Guardamos en la nube
                     supabase.table("pedidos").insert(nuevos_registros).execute()
-                    for op in operaciones_descuento:
-                        supabase.table("inventario").update({"stock_actual": op['nuevo_stock']}).eq("sku", op['sku']).execute()
                     
-                    st.session_state['msg_exito'] = f"✅ ¡{len(nuevos_registros)} pedidos registrados en la nube!"
-                    if alertas_stock:
-                        st.session_state['msg_alertas'] = list(set(alertas_stock))
-                    
-                    descargar_datos_seguros.clear()
-                    st.session_state['limpiador_tab1'] += 1 
-                    st.rerun() 
+                    # Consolidamos el descuento de inventario
+                    skus_actualizados = set()
+                    for row in pedidos_a_guardar:
+                        for art in decodificar_productos(row['producto']):
+                            skus_actualizados.add(art['sku'])
+                            
+                    for sku in skus_actualizados:
+                        nuevo_stock = inventario_db[sku]['stock_actual']
+                        stock_minimo = inventario_db[sku].get('stock_minimo', 0)
                         
+                        supabase.table("inventario").update({"stock_actual": nuevo_stock}).eq("sku", sku).execute()
+                        
+                        if nuevo_stock < 0:
+                            alertas_stock.append(f"⚠️ Atención: '{sku}' quedó con stock negativo ({nuevo_stock}).")
+                        elif nuevo_stock <= stock_minimo:
+                            alertas_stock.append(f"🔔 Alerta: '{sku}' llegó a su límite. Quedan {nuevo_stock} unidades.")
+                            
+                    st.session_state['msg_exito'] = f"✅ ¡{len(nuevos_registros)} pedidos correctos registrados exitosamente!"
                 except Exception as e:
                     st.error(f"❌ Error al guardar en la nube: {e}")
+                    
+            # Refrescamos la memoria del panel
+            st.session_state['msg_errores'] = errores_registro
+            st.session_state['msg_alertas'] = alertas_stock
+            st.session_state['filas_erroneas'] = pedidos_malos_df # Le pasamos las filas malas al sistema para que las muestre
+            
+            descargar_datos_seguros.clear()
+            st.session_state['limpiador_tab1'] += 1 
+            st.rerun() 
         else:
             st.warning("⚠️ La tabla está vacía.")
 
@@ -374,6 +410,7 @@ with tab3:
                         st.error(f"❌ Error guardando: {e}")
             
             with col_borrar:
+                # Botón de eliminación simple
                 if st.button("🗑️ Eliminar Seleccionados", use_container_width=True):
                     seleccionados = df_editado_global[df_editado_global['🗑️ Eliminar'] == True]
                     if not seleccionados.empty:
@@ -404,6 +441,7 @@ with tab4:
         if df_inv.empty:
             df_inv = pd.DataFrame(index=range(10), columns=["nombre", "sku", "stock_actual", "precio", "stock_minimo", "stock_ideal"])
         else:
+            # APLICAMOS EL ORDENAMIENTO ALFANUMÉRICO ANTES DE MOSTRAR
             df_inv['sku'] = df_inv['sku'].fillna('')
             df_inv = df_inv.sort_values(by='sku', key=lambda col: col.map(clave_orden_natural)).reset_index(drop=True)
             

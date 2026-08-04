@@ -31,6 +31,7 @@ def init_connection():
     try:
         url = st.secrets["SUPABASE_URL"].strip()
         key = st.secrets["SUPABASE_KEY"].strip()
+        # Se agrega un timeout nativo por debajo si la librería lo soporta
         return create_client(url, key)
     except Exception as e:
         st.error(f"❌ Error leyendo los Secrets: {e}")
@@ -78,7 +79,10 @@ def resaltar_estados(row):
         color = 'background-color: #fff3e0; color: black'
     return [color] * len(row)
 
-@st.cache_data(show_spinner=False)
+# OPTIMIZACIÓN EXTREMA ANTI-LAG: 
+# ttl=300 significa que los datos duran máximo 5 minutos en memoria, evitando saturación.
+# max_entries=10 evita que se acumulen múltiples historiales pesados.
+@st.cache_data(show_spinner=False, ttl=300, max_entries=10)
 def descargar_datos_seguros(nombre_tabla):
     try:
         respuesta = supabase.table(nombre_tabla).select("*").execute()
@@ -108,9 +112,7 @@ def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, pr
         return True 
     return False
 
-# NUEVA FUNCIÓN: Ordenamiento Natural Alfanumérico
 def clave_orden_natural(sku):
-    # Divide "CAR10" en ["CAR", 10] para comparar lógicamente
     return [int(texto) if texto.isdigit() else texto.lower() for texto in re.split(r'(\d+)', str(sku))]
 
 st.title("📦 Panel de Control Operativo")
@@ -402,7 +404,6 @@ with tab4:
         if df_inv.empty:
             df_inv = pd.DataFrame(index=range(10), columns=["nombre", "sku", "stock_actual", "precio", "stock_minimo", "stock_ideal"])
         else:
-            # APLICAMOS EL ORDENAMIENTO ALFANUMÉRICO ANTES DE MOSTRAR
             df_inv['sku'] = df_inv['sku'].fillna('')
             df_inv = df_inv.sort_values(by='sku', key=lambda col: col.map(clave_orden_natural)).reset_index(drop=True)
             

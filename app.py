@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import re
-from supabase import create_client, Client, ClientOptions
+from supabase import create_client, Client
 
 # --- 1. CONFIGURACIÓN VISUAL Y DE MEMORIA ---
 st.set_page_config(page_title="Control Go - Operaciones", layout="wide")
@@ -28,17 +28,13 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN BLINDADA A LA NUBE (CON TIMEOUT) ---
+# --- 2. CONEXIÓN MODO SEGURO (SIN TIMEOUTS QUE CHOQUEN) ---
 @st.cache_resource
 def init_connection():
     try:
         url = st.secrets["SUPABASE_URL"].strip()
         key = st.secrets["SUPABASE_KEY"].strip()
-        
-        # POKA-YOKE ANTI-CUELGUES: Límite de 10 segundos para responder
-        opciones = ClientOptions(postgrest_client_timeout=10)
-        
-        return create_client(url, key, options=opciones)
+        return create_client(url, key)
     except Exception as e:
         st.error(f"❌ Error leyendo los Secrets: {e}")
         st.stop()
@@ -85,16 +81,33 @@ def resaltar_estados(row):
         color = 'background-color: #fff3e0; color: black'
     return [color] * len(row)
 
-@st.cache_data(show_spinner=False, ttl=300, max_entries=10)
+# DESACTIVAMOS CACHÉ PARA EVITAR CONGELAMIENTOS DE MEMORIA RAM
 def descargar_datos_seguros(nombre_tabla):
     try:
-        respuesta = supabase.table(nombre_tabla).select("*").execute()
-        return respuesta.data
+        if nombre_tabla == "pedidos":
+            res_recientes = supabase.table(nombre_tabla).select("*").order("id_pedido", desc=True).limit(500).execute()
+            datos_recientes = res_recientes.data if res_recientes.data else []
+            
+            res_prov = supabase.table(nombre_tabla).select("*") \
+                .eq("medio", "PROV") \
+                .neq("estado", "ENTREGADO") \
+                .neq("estado", "ANULADO") \
+                .neq("estado", "DEVOLUCION") \
+                .execute()
+            datos_prov = res_prov.data if res_prov.data else []
+            
+            pedidos_consolidados = {p['id_pedido']: p for p in datos_prov}
+            for p in datos_recientes:
+                pedidos_consolidados[p['id_pedido']] = p
+                
+            return list(pedidos_consolidados.values())
+        else:
+            respuesta = supabase.table(nombre_tabla).select("*").execute()
+            return respuesta.data
     except Exception as e:
-        st.error(f"❌ ERROR CRÍTICO: No se pudo leer la tabla '{nombre_tabla}'. Detalle: {e}")
+        st.error(f"❌ ERROR CRÍTICO: No se pudo conectar con la base de datos. Detalle: {e}")
         return None
 
-# NUEVO MOTOR DE FECHAS YYYY-MM-DD
 def procesar_fecha(valor):
     if pd.isna(valor) or valor == "":
         return ""
@@ -129,7 +142,6 @@ def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, pr
 def clave_orden_natural(sku):
     return [int(texto) if texto.isdigit() else texto.lower() for texto in re.split(r'(\d+)', str(sku))]
 
-# Hora actual en Perú configurada en formato Año-Mes-Día
 def obtener_fecha_peru(formato="%Y-%m-%d"):
     hora_peru = datetime.datetime.utcnow() - datetime.timedelta(hours=5)
     return hora_peru.strftime(formato)
@@ -272,8 +284,6 @@ with tab1:
             st.session_state['msg_errores'] = errores_registro
             st.session_state['msg_alertas'] = alertas_stock
             st.session_state['filas_erroneas'] = pedidos_malos_df 
-            
-            descargar_datos_seguros.clear()
             st.session_state['limpiador_tab1'] += 1 
             st.rerun() 
         else:
@@ -353,8 +363,6 @@ with tab2:
                                     if auto_devueltos > 0:
                                         mensaje += f" 🔄 ¡Stock de {auto_devueltos} pedidos reingresado automáticamente!"
                                     st.success(mensaje)
-                                    
-                                    descargar_datos_seguros.clear() 
                                     st.rerun()
                         else:
                             st.markdown(f"<h3 style='margin-bottom: 5px;'>🚚 {medio}</h3>", unsafe_allow_html=True)
@@ -408,8 +416,6 @@ with tab3:
                         if auto_devueltos > 0:
                             mensaje += f" 🔄 Stock reingresado en anulaciones de almacén."
                         st.success(mensaje)
-                        
-                        descargar_datos_seguros.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Error guardando: {e}")
@@ -420,13 +426,11 @@ with tab3:
                     if not seleccionados.empty:
                         try:
                             eliminados = 0
-                            
                             for index, row in seleccionados.iterrows():
                                 supabase.table("pedidos").delete().eq("id_pedido", row['id_pedido']).execute()
                                 eliminados += 1
                                 
                             st.success(f"✅ ¡{eliminados} pedidos eliminados permanentemente del sistema!")
-                            descargar_datos_seguros.clear()
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Error eliminando pedidos: {e}")
@@ -473,8 +477,6 @@ with tab4:
                 registros_inv = df_inv_limpio.to_dict('records')
                 supabase.table("inventario").insert(registros_inv).execute()
                 st.success("✅ Inventario en la nube actualizado.")
-                
-                descargar_datos_seguros.clear() 
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ Error al guardar inventario: {e}")
@@ -583,8 +585,6 @@ with tab5:
                         if auto_devueltos > 0:
                             mensaje += f" 🔄 ¡Stock de {auto_devueltos} pedidos anulados reingresado automáticamente!"
                         st.success(mensaje)
-                        
-                        descargar_datos_seguros.clear()
                         st.rerun()
             else:
                 st.info("Ruta limpia. No hay envíos pendientes de cobro/recojo en provincia.")
@@ -663,8 +663,6 @@ with tab6:
                                 supabase.table("inventario").update({"stock_actual": nuevo_stock}).eq("sku", sku_ingreso).execute()
                             
                             st.session_state['msg_exito_ingreso'] = f"✅ ¡Se sumó el stock de {len(df_validos)} productos correctamente!"
-                            
-                            descargar_datos_seguros.clear() 
                             st.session_state['limpiador_ingreso'] += 1
                             st.rerun()
                         except Exception as e:
@@ -690,7 +688,6 @@ with tab7:
             st.markdown(f"### 📅 Fecha de Operación: **{hoy_str}**")
         with col_refresh:
             if st.button("🔄 Actualizar Datos"):
-                descargar_datos_seguros.clear()
                 st.rerun()
         
         if not df_ped.empty:

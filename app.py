@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import re
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 
 # --- 1. CONFIGURACIÓN VISUAL Y DE MEMORIA ---
 st.set_page_config(page_title="Control Go - Operaciones", layout="wide")
@@ -28,13 +28,17 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN BLINDADA A LA NUBE ---
+# --- 2. CONEXIÓN BLINDADA A LA NUBE (CON TIMEOUT) ---
 @st.cache_resource
 def init_connection():
     try:
         url = st.secrets["SUPABASE_URL"].strip()
         key = st.secrets["SUPABASE_KEY"].strip()
-        return create_client(url, key)
+        
+        # POKA-YOKE ANTI-CUELGUES: Límite de 10 segundos para responder
+        opciones = ClientOptions(postgrest_client_timeout=10)
+        
+        return create_client(url, key, options=opciones)
     except Exception as e:
         st.error(f"❌ Error leyendo los Secrets: {e}")
         st.stop()

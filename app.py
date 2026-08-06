@@ -33,18 +33,14 @@ def init_connection():
 
 supabase = init_connection()
 
-# --- 3. NUEVO MOTOR ANTI-CUELGUES (1 SOLA LLAMADA PARA TODAS LAS PESTAÑAS) ---
+# --- 3. NUEVO MOTOR ANTI-CUELGUES ---
 @st.cache_data(show_spinner=False, ttl=180)
 def cargar_todo():
     try:
-        # 1. Bajar inventario completo
         inv = supabase.table("inventario").select("*").execute().data
-        # 2. Bajar últimos 500 pedidos
         ped = supabase.table("pedidos").select("*").order("id_pedido", desc=True).limit(500).execute().data
-        # 3. Bajar los Shalom pendientes
         prov = supabase.table("pedidos").select("*").eq("medio", "PROV").neq("estado", "ENTREGADO").neq("estado", "ANULADO").neq("estado", "DEVOLUCION").execute().data
         
-        # Unir pedidos sin duplicados
         pedidos_consolidados = {p['id_pedido']: p for p in prov} if prov else {}
         if ped:
             for p in ped: pedidos_consolidados[p['id_pedido']] = p
@@ -55,7 +51,6 @@ def cargar_todo():
 
 inv_global, ped_global = cargar_todo()
 
-# Botón de pánico si falla el internet de Supabase
 if inv_global is None or ped_global is None:
     st.error("⚠️ Hubo un micro-corte de internet al conectar con la base de datos.")
     if st.button("🔄 Reconectar Ahora"):
@@ -175,7 +170,7 @@ with tab1:
     if st.button("Registrar Pedidos"):
         df_limpio = df_editado.dropna(subset=['nombre', 'producto'], how='any').copy()
         if not df_limpio.empty:
-            inventario_db = {item['sku']: item for item in inv_global}
+            inventario_db = {item['sku']: item for item in inv_global} if inv_global else {}
             pedidos_a_guardar = []
             pedidos_malos_df = [] 
             alertas_stock = []
@@ -257,136 +252,159 @@ with tab1:
 # --- PESTAÑA 2: RUTAS ---
 with tab2:
     st.header("Torre de Control de Despachos")
-    if ped_global:
+    if ped_global is not None:
         df_todos = pd.DataFrame(ped_global)
-        fechas_validas = [d for d in df_todos['fecha_entrega'].dropna().unique() if str(d).strip() != ""]
-        lista_fechas = sorted(fechas_validas, key=parse_fecha)
-        hoy_str = obtener_fecha_peru()
-        
-        if hoy_str not in lista_fechas:
-            lista_fechas.append(hoy_str)
-            lista_fechas = sorted(lista_fechas, key=parse_fecha)
+        if not df_todos.empty:
+            fechas_validas = [d for d in df_todos['fecha_entrega'].dropna().unique() if str(d).strip() != ""]
+            lista_fechas = sorted(fechas_validas, key=parse_fecha)
+            hoy_str = obtener_fecha_peru()
             
-        try: index_hoy = lista_fechas.index(hoy_str)
-        except: index_hoy = len(lista_fechas) - 1
-        
-        fecha_filtro = st.selectbox("📅 Fecha de ruta:", options=lista_fechas, index=index_hoy)
-        medios_seleccionados = st.multiselect("Courier:", options=opciones_medio, default=["MD", "ENTRE GO", "URB", "PROV"], max_selections=4)
-        
-        if medios_seleccionados:
-            columnas = st.columns(2)
-            for i, medio in enumerate(medios_seleccionados):
-                with columnas[i % 2]:
-                    filtro_medio = df_todos['medio'] == medio
-                    filtro_fecha = (df_todos['fecha_entrega'] == fecha_filtro) | (df_todos['estado'] == "REPROGRAMADO")
-                    df_medio = df_todos[filtro_medio & filtro_fecha].copy()
-                    
-                    if not df_medio.empty:
-                        pedidos_armados = len(df_medio[df_medio['estado'].isin(['ARMADO', 'EN RUTA', 'ENTREGADO'])])
-                        st.markdown(f"### 🚚 {medio} ({pedidos_armados}/{len(df_medio)} listos)")
-                        df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
+            if hoy_str not in lista_fechas:
+                lista_fechas.append(hoy_str)
+                lista_fechas = sorted(lista_fechas, key=parse_fecha)
+                
+            try: index_hoy = lista_fechas.index(hoy_str)
+            except: index_hoy = len(lista_fechas) - 1
+            
+            fecha_filtro = st.selectbox("📅 Fecha de ruta:", options=lista_fechas, index=index_hoy)
+            medios_seleccionados = st.multiselect("Courier:", options=opciones_medio, default=["MD", "ENTRE GO", "URB", "PROV"], max_selections=4)
+            
+            if medios_seleccionados:
+                columnas = st.columns(2)
+                for i, medio in enumerate(medios_seleccionados):
+                    with columnas[i % 2]:
+                        filtro_medio = df_todos['medio'] == medio
+                        filtro_fecha = (df_todos['fecha_entrega'] == fecha_filtro) | (df_todos['estado'] == "REPROGRAMADO")
+                        df_medio = df_todos[filtro_medio & filtro_fecha].copy()
                         
-                        df_estilo = df_medio[['id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business', 'estado']].style.apply(resaltar_estados, axis=1)
-                        df_rutas = st.data_editor(df_estilo, key=f"ed_{medio}", disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "direccion", "producto", "business"], column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general)}, use_container_width=True, hide_index=True)
-                        
-                        if st.button(f"Guardar - {medio}", key=f"btn_{medio}"):
-                            for index, row in df_rutas.iterrows():
-                                est_ant = df_medio.loc[index, 'estado']
-                                if row['estado'] != est_ant:
-                                    procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], row['producto'])
-                                    supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
-                            st.success("✅ Guardado.")
-                            cargar_todo.clear()
-                            st.rerun()
-                    else:
-                        st.markdown(f"### 🚚 {medio}")
-                        st.info("Ruta limpia.")
-    else:
-        st.info("No hay pedidos.")
+                        if not df_medio.empty:
+                            pedidos_armados = len(df_medio[df_medio['estado'].isin(['ARMADO', 'EN RUTA', 'ENTREGADO'])])
+                            st.markdown(f"### 🚚 {medio} ({pedidos_armados}/{len(df_medio)} listos)")
+                            df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
+                            
+                            df_estilo = df_medio[['id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business', 'estado']].style.apply(resaltar_estados, axis=1)
+                            df_rutas = st.data_editor(df_estilo, key=f"ed_{medio}", disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "direccion", "producto", "business"], column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general)}, use_container_width=True, hide_index=True)
+                            
+                            if st.button(f"Guardar - {medio}", key=f"btn_{medio}"):
+                                for index, row in df_rutas.iterrows():
+                                    est_ant = df_medio.loc[index, 'estado']
+                                    if row['estado'] != est_ant:
+                                        procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], row['producto'])
+                                        supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
+                                st.success("✅ Guardado.")
+                                cargar_todo.clear()
+                                st.rerun()
+                        else:
+                            st.markdown(f"### 🚚 {medio}")
+                            st.info("Ruta limpia.")
+        else:
+            st.info("Aún no hay pedidos registrados.")
 
 # --- PESTAÑA 3: EDITAR ---
 with tab3:
     st.header("✏️ Editar Pedidos")
-    if ped_global:
+    if ped_global is not None:
         df_editar = pd.DataFrame(ped_global)
-        busqueda = st.text_input("🔍 Buscar pedido:")
-        if busqueda: df_editar = df_editar[df_editar.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)]
-        df_editar.insert(0, '🗑️ Eliminar', False)
-        
-        df_edi = st.data_editor(df_editar.head(30), use_container_width=True, hide_index=True, disabled=["id_pedido"], column_config={"medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas), "🗑️ Eliminar": st.column_config.CheckboxColumn("Eliminar", default=False)})
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("💾 Guardar Ediciones", use_container_width=True):
-                for index, row in df_edi.iterrows():
-                    if row['🗑️ Eliminar']: continue
-                    est_ant = df_editar.loc[index, 'estado']
-                    if row['estado'] != est_ant: procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], row['producto'])
-                    reg = row.drop('🗑️ Eliminar').to_dict()
-                    supabase.table("pedidos").update(reg).eq("id_pedido", row['id_pedido']).execute()
-                st.success("✅ Guardado.")
-                cargar_todo.clear()
-                st.rerun()
-        with c2:
-            if st.button("🗑️ Eliminar Seleccionados", use_container_width=True):
-                sel = df_edi[df_edi['🗑️ Eliminar'] == True]
-                for index, row in sel.iterrows(): supabase.table("pedidos").delete().eq("id_pedido", row['id_pedido']).execute()
-                st.success("✅ Eliminados.")
-                cargar_todo.clear()
-                st.rerun()
+        if not df_editar.empty:
+            busqueda = st.text_input("🔍 Buscar pedido:")
+            if busqueda: df_editar = df_editar[df_editar.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)]
+            df_editar.insert(0, '🗑️ Eliminar', False)
+            
+            df_edi = st.data_editor(df_editar.head(30), use_container_width=True, hide_index=True, disabled=["id_pedido"], column_config={"medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas), "🗑️ Eliminar": st.column_config.CheckboxColumn("Eliminar", default=False)})
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("💾 Guardar Ediciones", use_container_width=True):
+                    for index, row in df_edi.iterrows():
+                        if row['🗑️ Eliminar']: continue
+                        est_ant = df_editar.loc[index, 'estado']
+                        if row['estado'] != est_ant: procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], row['producto'])
+                        reg = row.drop('🗑️ Eliminar').to_dict()
+                        supabase.table("pedidos").update(reg).eq("id_pedido", row['id_pedido']).execute()
+                    st.success("✅ Guardado.")
+                    cargar_todo.clear()
+                    st.rerun()
+            with c2:
+                if st.button("🗑️ Eliminar Seleccionados", use_container_width=True):
+                    sel = df_edi[df_edi['🗑️ Eliminar'] == True]
+                    for index, row in sel.iterrows(): supabase.table("pedidos").delete().eq("id_pedido", row['id_pedido']).execute()
+                    st.success("✅ Eliminados.")
+                    cargar_todo.clear()
+                    st.rerun()
+        else:
+            st.info("No hay pedidos para editar.")
 
 # --- PESTAÑA 4: INVENTARIO ---
 with tab4:
     st.header("📊 Inventario")
-    if inv_global:
-        df_inv = pd.DataFrame(inv_global).fillna('')
-        df_inv = df_inv.sort_values(by='sku', key=lambda col: col.map(clave_orden_natural)).reset_index(drop=True)
+    if inv_global is not None:
+        df_inv = pd.DataFrame(inv_global)
+        if df_inv.empty:
+            df_inv = pd.DataFrame(index=range(10), columns=["nombre", "sku", "stock_actual", "precio", "stock_minimo", "stock_ideal"])
+        else:
+            df_inv = df_inv.fillna('')
+            df_inv = df_inv.sort_values(by='sku', key=lambda col: col.map(clave_orden_natural)).reset_index(drop=True)
+            
         df_ie = st.data_editor(df_inv, num_rows="dynamic", use_container_width=True, height=400)
         
         if st.button("💾 Guardar Inventario"):
             df_il = df_ie.dropna(subset=['sku', 'nombre'], how='any').copy()
-            df_il['sku'] = df_il['sku'].astype(str).str.strip()
-            df_il = df_il.drop_duplicates(subset=['sku'], keep='last')
-            df_il['stock_actual'] = pd.to_numeric(df_il['stock_actual'], errors='coerce').fillna(0).astype(int)
-            supabase.table("inventario").delete().neq("sku", "BORRAR").execute()
-            supabase.table("inventario").insert(df_il.to_dict('records')).execute()
-            st.success("✅ Actualizado.")
-            cargar_todo.clear()
-            st.rerun()
+            if not df_il.empty:
+                df_il['sku'] = df_il['sku'].astype(str).str.strip()
+                df_il = df_il.drop_duplicates(subset=['sku'], keep='last')
+                df_il['stock_actual'] = pd.to_numeric(df_il['stock_actual'], errors='coerce').fillna(0).astype(int)
+                
+                if 'precio' in df_il.columns: df_il['precio'] = pd.to_numeric(df_il['precio'], errors='coerce').fillna(0.0)
+                if 'stock_minimo' in df_il.columns: df_il['stock_minimo'] = pd.to_numeric(df_il['stock_minimo'], errors='coerce').fillna(0).astype(int)
+                if 'stock_ideal' in df_il.columns: df_il['stock_ideal'] = pd.to_numeric(df_il['stock_ideal'], errors='coerce').fillna(0).astype(int)
+                
+                try:
+                    supabase.table("inventario").delete().neq("sku", "BORRAR_TODO").execute()
+                    supabase.table("inventario").insert(df_il.to_dict('records')).execute()
+                    st.success("✅ Actualizado.")
+                    cargar_todo.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error guardando inventario: {e}")
+            else:
+                st.warning("⚠️ No hay datos válidos para guardar.")
 
 # --- PESTAÑA 5: SHALOM ---
 with tab5:
     st.header("📦 Control Shalom")
-    if ped_global:
+    if ped_global is not None:
         df_prov = pd.DataFrame(ped_global)
-        df_prov = df_prov[(df_prov['medio'] == 'PROV') & (~df_prov['estado'].isin(["ENTREGADO", "ANULADO", "DEVOLUCION"]))].copy()
-        
         if not df_prov.empty:
-            df_prov['adelanto'], df_prov['deuda'], df_prov['clave'] = 0.0, 0.0, ""
-            for idx, row in df_prov.iterrows():
-                obs = str(row['observaciones']).lower()
-                m = float(row['monto']) if pd.notna(row['monto']) else 0.0
-                ad = float(re.search(r'adelanto\s*:?\s*(\d+(?:\.\d+)?)', obs).group(1)) if re.search(r'adelanto\s*:?\s*(\d+(?:\.\d+)?)', obs) else 0.0
-                cl = re.search(r'clave\s*:?\s*(\d{4})', obs).group(1) if re.search(r'clave\s*:?\s*(\d{4})', obs) else (re.search(r'\b\d{4}\b', obs).group() if re.search(r'\b\d{4}\b', obs) else "")
-                df_prov.at[idx, 'adelanto'], df_prov.at[idx, 'deuda'], df_prov.at[idx, 'clave'] = ad, m - ad, cl
+            df_prov = df_prov[(df_prov['medio'] == 'PROV') & (~df_prov['estado'].isin(["ENTREGADO", "ANULADO", "DEVOLUCION"]))].copy()
             
-            df_ps = st.data_editor(df_prov[['id_pedido', 'nombre', 'celular', 'monto', 'direccion', 'adelanto', 'deuda', 'clave', 'estado']], disabled=["id_pedido", "nombre", "celular", "monto", "direccion", "adelanto", "deuda", "clave"], column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas)}, use_container_width=True, hide_index=True)
-            if st.button("💾 Guardar Shalom"):
-                for index, row in df_ps.iterrows():
-                    est_ant = df_prov.loc[index, 'estado']
-                    if row['estado'] != est_ant:
-                        procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], df_prov.loc[index, 'producto'])
-                        supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
-                st.success("✅ Guardado.")
-                cargar_todo.clear()
-                st.rerun()
-        else: st.info("Ruta limpia.")
+            if not df_prov.empty:
+                df_prov['adelanto'], df_prov['deuda'], df_prov['clave'] = 0.0, 0.0, ""
+                for idx, row in df_prov.iterrows():
+                    obs = str(row['observaciones']).lower()
+                    m = float(row['monto']) if pd.notna(row['monto']) and str(row['monto']).strip() != "" else 0.0
+                    ad = float(re.search(r'adelanto\s*:?\s*(\d+(?:\.\d+)?)', obs).group(1)) if re.search(r'adelanto\s*:?\s*(\d+(?:\.\d+)?)', obs) else 0.0
+                    cl = re.search(r'clave\s*:?\s*(\d{4})', obs).group(1) if re.search(r'clave\s*:?\s*(\d{4})', obs) else (re.search(r'\b\d{4}\b', obs).group() if re.search(r'\b\d{4}\b', obs) else "")
+                    df_prov.at[idx, 'adelanto'], df_prov.at[idx, 'deuda'], df_prov.at[idx, 'clave'] = ad, m - ad, cl
+                
+                df_ps = st.data_editor(df_prov[['id_pedido', 'nombre', 'celular', 'monto', 'direccion', 'adelanto', 'deuda', 'clave', 'estado']], disabled=["id_pedido", "nombre", "celular", "monto", "direccion", "adelanto", "deuda", "clave"], column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas)}, use_container_width=True, hide_index=True)
+                if st.button("💾 Guardar Shalom"):
+                    for index, row in df_ps.iterrows():
+                        est_ant = df_prov.loc[index, 'estado']
+                        if row['estado'] != est_ant:
+                            procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], df_prov.loc[index, 'producto'])
+                            supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
+                    st.success("✅ Guardado.")
+                    cargar_todo.clear()
+                    st.rerun()
+            else: st.info("Ruta limpia. No hay envíos pendientes.")
+        else:
+            st.info("No hay pedidos registrados.")
 
 # --- PESTAÑA 6: INGRESO ---
 with tab6:
     st.header("📥 Ingreso de Mercadería")
-    if inv_global:
-        inv_db = {item['sku']: item for item in inv_global}
+    if inv_global is not None:
+        inv_db = {item['sku']: item for item in inv_global} if inv_global else {}
         c1, c2 = st.columns([1, 1.5])
         with c1: df_in = st.data_editor(pd.DataFrame(index=range(10), columns=["sku", "cantidad"]), num_rows="dynamic", use_container_width=True)
         df_v = df_in.dropna(subset=['sku', 'cantidad']).copy()
@@ -399,15 +417,18 @@ with tab6:
                 df_v['Producto'] = nombres
                 st.dataframe(df_v[['sku', 'Producto', 'cantidad']], use_container_width=True, hide_index=True)
                 if "❌ NO EXISTE" not in nombres and st.button("💾 Ingresar Stock", use_container_width=True):
-                    for idx, row in df_v.iterrows(): supabase.table("inventario").update({"stock_actual": inv_db[row['sku']]['stock_actual'] + row['cantidad']}).eq("sku", row['sku']).execute()
-                    st.success("✅ Stock sumado.")
-                    cargar_todo.clear()
-                    st.rerun()
+                    try:
+                        for idx, row in df_v.iterrows(): supabase.table("inventario").update({"stock_actual": inv_db[row['sku']]['stock_actual'] + row['cantidad']}).eq("sku", row['sku']).execute()
+                        st.success("✅ Stock sumado.")
+                        cargar_todo.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error sumando stock: {e}")
 
 # --- PESTAÑA 7: RESUMEN ---
 with tab7:
     st.header("📈 Resumen del Día")
-    if ped_global and inv_global:
+    if ped_global is not None and inv_global is not None:
         hoy_str = obtener_fecha_peru()
         st.markdown(f"### 📅 Fecha: **{hoy_str}**")
         if st.button("🔄 Actualizar"):
@@ -415,15 +436,18 @@ with tab7:
             st.rerun()
         
         df_hoy = pd.DataFrame(ped_global)
-        df_hoy = df_hoy[(df_hoy['fecha_pedido'] == hoy_str) & (~df_hoy['estado'].isin(["ANULADO", "DEVOLUCION"]))]
-        st.metric("📦 Pedidos Efectivos Hoy", len(df_hoy))
-        
         if not df_hoy.empty:
-            v_skus = {}
-            for p in df_hoy['producto']:
-                for a in decodificar_productos(p): v_skus[a['sku']] = v_skus.get(a['sku'], 0) + a['cant']
+            df_hoy = df_hoy[(df_hoy['fecha_pedido'] == hoy_str) & (~df_hoy['estado'].isin(["ANULADO", "DEVOLUCION"]))]
+            st.metric("📦 Pedidos Efectivos Hoy", len(df_hoy))
             
-            if v_skus:
-                inv_dict = {i['sku']: i for i in inv_global}
-                rep = [{"SKU": s, "Producto": inv_dict.get(s, {}).get('nombre', '⚠️ NO ENCONTRADO'), "Inicial": inv_dict.get(s, {}).get('stock_actual', 0) + c, "Vendidas": c, "Final": inv_dict.get(s, {}).get('stock_actual', 0)} for s, c in v_skus.items()]
-                st.dataframe(pd.DataFrame(rep).sort_values("Vendidas", ascending=False).reset_index(drop=True), use_container_width=True)
+            if not df_hoy.empty:
+                v_skus = {}
+                for p in df_hoy['producto']:
+                    for a in decodificar_productos(p): v_skus[a['sku']] = v_skus.get(a['sku'], 0) + a['cant']
+                
+                if v_skus:
+                    inv_dict = {i['sku']: i for i in inv_global} if inv_global else {}
+                    rep = [{"SKU": s, "Producto": inv_dict.get(s, {}).get('nombre', '⚠️ NO ENCONTRADO'), "Inicial": inv_dict.get(s, {}).get('stock_actual', 0) + c, "Vendidas": c, "Final": inv_dict.get(s, {}).get('stock_actual', 0)} for s, c in v_skus.items()]
+                    st.dataframe(pd.DataFrame(rep).sort_values("Vendidas", ascending=False).reset_index(drop=True), use_container_width=True)
+        else:
+            st.info("No hay pedidos para resumir.")

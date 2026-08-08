@@ -59,7 +59,8 @@ if inv_global is None or ped_global is None:
     st.stop()
 
 # --- 4. VARIABLES GLOBALES Y FUNCIONES ---
-opciones_medio = ["MD", "ENTRE GO 2", "SELLER", "PROV", "ENTRE GO", "INDRIVER", "TIENDA S", "TIENDA C", "TIENDA Y", "URB", "ENTREGATE"]
+# ORDEN ACTUALIZADO SEGÚN TU SOLICITUD
+opciones_medio = ["MD", "ENTRE GO", "SELLER", "URB", "PROV", "ENTRE GO 2", "INDRIVER", "ENTREGATE", "TIENDA Y", "TIENDA C", "TIENDA S"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 opciones_estado_general = ["POR ARMAR", "ARMADO", "EN RUTA", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
 opciones_estado_todas = ["POR ARMAR", "ARMADO", "EN RUTA", "POR RECOGER", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
@@ -267,7 +268,8 @@ with tab2:
             except: index_hoy = len(lista_fechas) - 1
             
             fecha_filtro = st.selectbox("📅 Fecha de ruta:", options=lista_fechas, index=index_hoy)
-            medios_seleccionados = st.multiselect("Courier:", options=opciones_medio, default=["MD", "ENTRE GO", "URB", "PROV"], max_selections=4)
+            # TODOS LOS COURIERS ACTIVOS POR DEFECTO Y SIN LÍMITE
+            medios_seleccionados = st.multiselect("Courier:", options=opciones_medio, default=opciones_medio)
             
             if medios_seleccionados:
                 columnas = st.columns(2)
@@ -282,8 +284,13 @@ with tab2:
                             st.markdown(f"### 🚚 {medio} ({pedidos_armados}/{len(df_medio)} listos)")
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
                             
-                            df_estilo = df_medio[['id_pedido', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business', 'estado']].style.apply(resaltar_estados, axis=1)
-                            df_rutas = st.data_editor(df_estilo, key=f"ed_{medio}", disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "direccion", "producto", "business"], column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general)}, use_container_width=True, hide_index=True)
+                            # SOLUCIÓN DE ARRASTRE: 'estado' SE MUEVE AL INICIO, JUSTO DESPUÉS DEL ID
+                            df_estilo = df_medio[['id_pedido', 'estado', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business']].style.apply(resaltar_estados, axis=1)
+                            
+                            # ALTURA DINÁMICA DE TABLA PARA MINIMIZAR LA BARRA VERTICAL
+                            altura_dinamica = min(500, (len(df_medio) * 35) + 40)
+                            
+                            df_rutas = st.data_editor(df_estilo, key=f"ed_{medio}", height=altura_dinamica, disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "direccion", "producto", "business"], column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general)}, use_container_width=True, hide_index=True)
                             
                             if st.button(f"Guardar - {medio}", key=f"btn_{medio}"):
                                 for index, row in df_rutas.iterrows():

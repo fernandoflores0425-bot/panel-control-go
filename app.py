@@ -153,7 +153,11 @@ with tab1:
         df_base = pd.concat([df_previo, df_vacias], ignore_index=True)
     else:
         df_base = pd.DataFrame(index=range(15), columns=columnas_base)
-    
+    # --- NUEVAS LÍNEAS PARA EVITAR EL CHOQUE DE FORMATOS ---
+    df_base['fecha_pedido'] = pd.to_datetime(df_base['fecha_pedido'], errors='coerce')
+    df_base['fecha_entrega'] = pd.to_datetime(df_base['fecha_entrega'], errors='coerce')
+    df_base['monto'] = pd.to_numeric(df_base['monto'], errors='coerce')        
+
     df_editado = st.data_editor(
         df_base, 
         num_rows="dynamic",

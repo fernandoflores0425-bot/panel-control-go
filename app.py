@@ -13,6 +13,9 @@ if 'limpiador_ingreso' not in st.session_state:
     st.session_state['limpiador_ingreso'] = 0
 if 'filas_erroneas' not in st.session_state:
     st.session_state['filas_erroneas'] = []
+# --- NUEVA LÍNEA PARA EL HISTORIAL ---
+if 'historial_ingresos_sesion' not in st.session_state:
+    st.session_state['historial_ingresos_sesion'] = []
 
 st.markdown("""
     <style>
@@ -59,7 +62,6 @@ if inv_global is None or ped_global is None:
     st.stop()
 
 # --- 4. VARIABLES GLOBALES Y FUNCIONES ---
-# ORDEN ACTUALIZADO SEGÚN TU SOLICITUD
 opciones_medio = ["MD", "ENTRE GO", "SELLER", "URB", "PROV", "ENTRE GO 2", "INDRIVER", "ENTREGATE", "TIENDA Y", "TIENDA C", "TIENDA S"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 opciones_estado_general = ["POR ARMAR", "ARMADO", "EN RUTA", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
@@ -153,11 +155,13 @@ with tab1:
         df_base = pd.concat([df_previo, df_vacias], ignore_index=True)
     else:
         df_base = pd.DataFrame(index=range(15), columns=columnas_base)
+        
     # --- NUEVAS LÍNEAS PARA EVITAR EL CHOQUE DE FORMATOS ---
     df_base['fecha_pedido'] = pd.to_datetime(df_base['fecha_pedido'], errors='coerce')
     df_base['fecha_entrega'] = pd.to_datetime(df_base['fecha_entrega'], errors='coerce')
-    df_base['monto'] = pd.to_numeric(df_base['monto'], errors='coerce')        
-
+    df_base['monto'] = pd.to_numeric(df_base['monto'], errors='coerce')
+    # --------------------------------------------------------
+    
     df_editado = st.data_editor(
         df_base, 
         num_rows="dynamic",
@@ -272,7 +276,6 @@ with tab2:
             except: index_hoy = len(lista_fechas) - 1
             
             fecha_filtro = st.selectbox("📅 Fecha de ruta:", options=lista_fechas, index=index_hoy)
-            # TODOS LOS COURIERS ACTIVOS POR DEFECTO Y SIN LÍMITE
             medios_seleccionados = st.multiselect("Courier:", options=opciones_medio, default=opciones_medio)
             
             if medios_seleccionados:
@@ -288,10 +291,8 @@ with tab2:
                             st.markdown(f"### 🚚 {medio} ({pedidos_armados}/{len(df_medio)} listos)")
                             df_medio = df_medio.sort_values(by="id_pedido", ascending=False)
                             
-                            # SOLUCIÓN DE ARRASTRE: 'estado' SE MUEVE AL INICIO, JUSTO DESPUÉS DEL ID
                             df_estilo = df_medio[['id_pedido', 'estado', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business']].style.apply(resaltar_estados, axis=1)
                             
-                            # ALTURA DINÁMICA DE TABLA PARA MINIMIZAR LA BARRA VERTICAL
                             altura_dinamica = min(500, (len(df_medio) * 35) + 40)
                             
                             df_rutas = st.data_editor(df_estilo, key=f"ed_{medio}", height=altura_dinamica, disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "direccion", "producto", "business"], column_config={"id_pedido": None, "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general)}, use_container_width=True, hide_index=True)
@@ -416,8 +417,18 @@ with tab6:
     if inv_global is not None:
         inv_db = {item['sku']: item for item in inv_global} if inv_global else {}
         c1, c2 = st.columns([1, 1.5])
-        with c1: df_in = st.data_editor(pd.DataFrame(index=range(10), columns=["sku", "cantidad"]), num_rows="dynamic", use_container_width=True)
+        
+        with c1: 
+            # AQUI ESTÁ LA MAGIA DEL BORRADO: La llave dinámica (key)
+            df_in = st.data_editor(
+                pd.DataFrame(index=range(10), columns=["sku", "cantidad"]), 
+                num_rows="dynamic", 
+                use_container_width=True,
+                key=f"editor_ingresos_{st.session_state['limpiador_ingreso']}"
+            )
+            
         df_v = df_in.dropna(subset=['sku', 'cantidad']).copy()
+        
         with c2:
             if not df_v.empty:
                 df_v['sku'] = df_v['sku'].astype(str).str.strip()
@@ -426,14 +437,47 @@ with tab6:
                 nombres = [inv_db[s]['nombre'] if s in inv_db else "❌ NO EXISTE" for s in df_v['sku']]
                 df_v['Producto'] = nombres
                 st.dataframe(df_v[['sku', 'Producto', 'cantidad']], use_container_width=True, hide_index=True)
+                
                 if "❌ NO EXISTE" not in nombres and st.button("💾 Ingresar Stock", use_container_width=True):
                     try:
-                        for idx, row in df_v.iterrows(): supabase.table("inventario").update({"stock_actual": inv_db[row['sku']]['stock_actual'] + row['cantidad']}).eq("sku", row['sku']).execute()
-                        st.success("✅ Stock sumado.")
+                        ingresos_exitosos = []
+                        hora_actual = obtener_fecha_peru("%Y-%m-%d %H:%M:%S")
+                        
+                        for idx, row in df_v.iterrows(): 
+                            # Sumar a la base de datos
+                            supabase.table("inventario").update({"stock_actual": inv_db[row['sku']]['stock_actual'] + row['cantidad']}).eq("sku", row['sku']).execute()
+                            
+                            # Registrar en el historial
+                            ingresos_exitosos.append({
+                                "Hora del Ingreso": hora_actual,
+                                "SKU": row['sku'],
+                                "Producto": row['Producto'],
+                                "Cant. Ingresada": row['cantidad']
+                            })
+                        
+                        # Guardar el registro en la memoria temporal
+                        st.session_state['historial_ingresos_sesion'].extend(ingresos_exitosos)
+                        
+                        st.success("✅ Stock sumado exitosamente.")
+                        
+                        # INCREMENTAR LA LLAVE PARA BORRAR LA TABLA
+                        st.session_state['limpiador_ingreso'] += 1
+                        
                         cargar_todo.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Error sumando stock: {e}")
+                        
+        # --- NUEVO CUADRO DE HISTORIAL ---
+        st.divider()
+        st.subheader("📋 Historial de Ingresos Realizados (Revisión)")
+        
+        if st.session_state['historial_ingresos_sesion']:
+            df_historial = pd.DataFrame(st.session_state['historial_ingresos_sesion'])
+            # Mostramos el historial invertido para que los últimos ingresos salgan arriba del todo
+            st.dataframe(df_historial.iloc[::-1], use_container_width=True, hide_index=True)
+        else:
+            st.info("Aún no has registrado ingresos de mercadería el día de hoy.")
 
 # --- PESTAÑA 7: RESUMEN ---
 with tab7:

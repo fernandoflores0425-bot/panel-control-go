@@ -379,6 +379,34 @@ with tab4:
                     st.error(f"❌ Error guardando inventario: {e}")
             else:
                 st.warning("⚠️ No hay datos válidos para guardar.")
+        # --- NUEVO CUADRO DE REPOSICIÓN ---
+        st.divider()
+        st.subheader("🛒 Alertas de Reposición")
+        
+        if not df_inv.empty:
+            # Aseguramos que los números se lean correctamente
+            df_inv['stock_actual'] = pd.to_numeric(df_inv['stock_actual'], errors='coerce').fillna(0)
+            if 'stock_minimo' in df_inv.columns:
+                df_inv['stock_minimo'] = pd.to_numeric(df_inv['stock_minimo'], errors='coerce').fillna(0)
+                
+                # Filtramos los que están en rojo
+                df_reposicion = df_inv[df_inv['stock_actual'] <= df_inv['stock_minimo']].copy()
+                
+                if not df_reposicion.empty:
+                    # Calculamos cuánto falta para llegar al ideal
+                    if 'stock_ideal' in df_reposicion.columns:
+                        df_reposicion['stock_ideal'] = pd.to_numeric(df_reposicion['stock_ideal'], errors='coerce').fillna(0)
+                        df_reposicion['Faltante a Comprar'] = df_reposicion['stock_ideal'] - df_reposicion['stock_actual']
+                        # Si el cálculo da negativo, lo dejamos en 0
+                        df_reposicion['Faltante a Comprar'] = df_reposicion['Faltante a Comprar'].apply(lambda x: int(x) if x > 0 else 0)
+                        columnas_mostrar = ['sku', 'nombre', 'stock_actual', 'stock_minimo', 'Faltante a Comprar']
+                    else:
+                        columnas_mostrar = ['sku', 'nombre', 'stock_actual', 'stock_minimo']
+                    
+                    st.warning(f"⚠️ Tienes {len(df_reposicion)} productos con stock bajo o agotado.")
+                    st.dataframe(df_reposicion[columnas_mostrar].style.apply(lambda x: ['background-color: #ffebee'] * len(x), axis=1), use_container_width=True, hide_index=True)
+                else:
+                    st.success("✅ Todo tu inventario está por encima del nivel mínimo. ¡No hay urgencias de compra!")
 
 # --- PESTAÑA 5: SHALOM ---
 with tab5:

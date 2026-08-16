@@ -321,7 +321,7 @@ with tab3:
             if busqueda: df_editar = df_editar[df_editar.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)]
             df_editar.insert(0, '🗑️ Eliminar', False)
             
-            df_edi = st.data_editor(df_editar.head(30), use_container_width=True, hide_index=True, disabled=["id_pedido"], column_config={"medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas), "🗑️ Eliminar": st.column_config.CheckboxColumn("Eliminar", default=False)})
+            df_edi = st.data_editor(df_editar.head(100), use_container_width=True, hide_index=True, disabled=["id_pedido"], column_config={"medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas), "🗑️ Eliminar": st.column_config.CheckboxColumn("Eliminar", default=False)})
             
             c1, c2 = st.columns(2)
             with c1:

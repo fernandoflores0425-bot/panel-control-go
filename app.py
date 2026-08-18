@@ -196,6 +196,13 @@ with tab1:
                     pedidos_malos_df.append(row.to_dict())
                     continue
                 
+                # --- POKA-YOKE: VALIDACIÓN SELLER - BELA ---
+                if medio == "SELLER" and business != "BELA":
+                    errores_registro.append(f"❌ **{nombre}**: El medio 'SELLER' solo se puede usar con el negocio 'BELA'. Corrige la celda.")
+                    pedidos_malos_df.append(row.to_dict())
+                    continue
+                # -------------------------------------------
+                
                 articulos_pedidos = decodificar_productos(producto)
                 skus_invalidos = [art['sku'] for art in articulos_pedidos if art['sku'] not in inventario_db]
                 if skus_invalidos:
@@ -257,7 +264,6 @@ with tab1:
             st.rerun() 
         else:
             st.warning("⚠️ Tabla vacía.")
-
 # --- PESTAÑA 2: RUTAS ---
 with tab2:
     st.header("Torre de Control de Despachos")

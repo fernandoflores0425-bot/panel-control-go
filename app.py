@@ -355,7 +355,10 @@ with tab4:
         else:
             df_inv = df_inv.fillna('')
             df_inv = df_inv.sort_values(by='sku', key=lambda col: col.map(clave_orden_natural)).reset_index(drop=True)
-            
+        # --- REGLA DE CONFIDENCIALIDAD: OCULTAR COSTO ---
+        if 'costo' in df_inv.columns:
+            df_inv = df_inv.drop(columns=['costo'])
+        # ------------------------------------------------
         df_ie = st.data_editor(df_inv, num_rows="dynamic", use_container_width=True, height=400)
         
         if st.button("💾 Guardar Inventario"):

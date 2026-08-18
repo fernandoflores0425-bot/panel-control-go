@@ -461,7 +461,6 @@ with tab6:
         c1, c2 = st.columns([1, 1.5])
         
         with c1: 
-            # AQUI ESTÁ LA MAGIA DEL BORRADO: La llave dinámica (key)
             df_in = st.data_editor(
                 pd.DataFrame(index=range(10), columns=["sku", "cantidad"]), 
                 num_rows="dynamic", 
@@ -482,44 +481,46 @@ with tab6:
                 
                 if "❌ NO EXISTE" not in nombres and st.button("💾 Ingresar Stock", use_container_width=True):
                     try:
-                        ingresos_exitosos = []
                         hora_actual = obtener_fecha_peru("%Y-%m-%d %H:%M:%S")
+                        registros_historial = []
                         
                         for idx, row in df_v.iterrows(): 
-                            # Sumar a la base de datos
+                            # 1. Sumar a la base de datos de inventario
                             supabase.table("inventario").update({"stock_actual": inv_db[row['sku']]['stock_actual'] + row['cantidad']}).eq("sku", row['sku']).execute()
                             
-                            # Registrar en el historial
-                            ingresos_exitosos.append({
-                                "Hora del Ingreso": hora_actual,
-                                "SKU": row['sku'],
-                                "Producto": row['Producto'],
-                                "Cant. Ingresada": row['cantidad']
+                            # 2. Preparar el registro para la nueva tabla
+                            registros_historial.append({
+                                "fecha": hora_actual,
+                                "sku": row['sku'],
+                                "producto": row['Producto'],
+                                "cantidad": row['cantidad']
                             })
                         
-                        # Guardar el registro en la memoria temporal
-                        st.session_state['historial_ingresos_sesion'].extend(ingresos_exitosos)
+                        # 3. Guardar el historial de forma PERMANENTE en Supabase
+                        supabase.table("historial_ingresos").insert(registros_historial).execute()
                         
                         st.success("✅ Stock sumado exitosamente.")
-                        
-                        # INCREMENTAR LA LLAVE PARA BORRAR LA TABLA
                         st.session_state['limpiador_ingreso'] += 1
-                        
                         cargar_todo.clear()
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Error sumando stock: {e}")
                         
-        # --- NUEVO CUADRO DE HISTORIAL ---
+        # --- NUEVO CUADRO DE HISTORIAL (DESDE BASE DE DATOS) ---
         st.divider()
-        st.subheader("📋 Historial de Ingresos Realizados (Revisión)")
+        st.subheader("📋 Últimos 50 Ingresos (Historial Permanente)")
         
-        if st.session_state['historial_ingresos_sesion']:
-            df_historial = pd.DataFrame(st.session_state['historial_ingresos_sesion'])
-            # Mostramos el historial invertido para que los últimos ingresos salgan arriba del todo
-            st.dataframe(df_historial.iloc[::-1], use_container_width=True, hide_index=True)
-        else:
-            st.info("Aún no has registrado ingresos de mercadería el día de hoy.")
+        try:
+            # Descargamos directamente de Supabase
+            historial_db = supabase.table("historial_ingresos").select("*").order("fecha", desc=True).limit(50).execute().data
+            if historial_db:
+                df_historial = pd.DataFrame(historial_db)
+                df_historial = df_historial.rename(columns={"fecha": "Hora del Ingreso", "sku": "SKU", "producto": "Producto", "cantidad": "Cant. Ingresada"})
+                st.dataframe(df_historial[['Hora del Ingreso', 'SKU', 'Producto', 'Cant. Ingresada']], use_container_width=True, hide_index=True)
+            else:
+                st.info("Aún no hay registros de ingresos guardados.")
+        except Exception as e:
+            st.warning("⚠️ No olvides crear la tabla 'historial_ingresos' en Supabase para que este cuadro funcione.")
 
 # --- PESTAÑA 7: RESUMEN ---
 with tab7:

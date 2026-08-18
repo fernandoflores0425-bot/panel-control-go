@@ -506,21 +506,36 @@ with tab6:
                     except Exception as e:
                         st.error(f"❌ Error sumando stock: {e}")
                         
-        # --- NUEVO CUADRO DE HISTORIAL (DESDE BASE DE DATOS) ---
+        # --- NUEVO CUADRO DE HISTORIAL (POR DÍA) ---
         st.divider()
-        st.subheader("📋 Últimos 50 Ingresos (Historial Permanente)")
+        c_tit, c_filtro = st.columns([2, 1])
+        with c_tit:
+            st.subheader("📋 Historial de Ingresos")
+        with c_filtro:
+            # Usamos la hora de Perú para que por defecto marque el día correcto
+            fecha_peru_hoy = datetime.datetime.strptime(obtener_fecha_peru("%Y-%m-%d"), "%Y-%m-%d").date()
+            fecha_historial = st.date_input("📅 Consultar fecha:", fecha_peru_hoy)
         
         try:
-            # Descargamos directamente de Supabase
-            historial_db = supabase.table("historial_ingresos").select("*").order("fecha", desc=True).limit(50).execute().data
+            # Descargamos los últimos registros
+            historial_db = supabase.table("historial_ingresos").select("*").order("fecha", desc=True).limit(2000).execute().data
             if historial_db:
                 df_historial = pd.DataFrame(historial_db)
-                df_historial = df_historial.rename(columns={"fecha": "Hora del Ingreso", "sku": "SKU", "producto": "Producto", "cantidad": "Cant. Ingresada"})
-                st.dataframe(df_historial[['Hora del Ingreso', 'SKU', 'Producto', 'Cant. Ingresada']], use_container_width=True, hide_index=True)
+                # Convertimos la columna de texto a formato fecha para poder compararla con el calendario
+                df_historial['fecha_corta'] = pd.to_datetime(df_historial['fecha']).dt.date
+                
+                # Filtramos matemáticamente solo la fecha elegida
+                df_filtrado = df_historial[df_historial['fecha_corta'] == fecha_historial].copy()
+                
+                if not df_filtrado.empty:
+                    df_filtrado = df_filtrado.rename(columns={"fecha": "Hora del Ingreso", "sku": "SKU", "producto": "Producto", "cantidad": "Cant. Ingresada"})
+                    st.dataframe(df_filtrado[['Hora del Ingreso', 'SKU', 'Producto', 'Cant. Ingresada']], use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"No hay mercadería ingresada el {fecha_historial.strftime('%d/%m/%Y')}.")
             else:
-                st.info("Aún no hay registros de ingresos guardados.")
+                st.info("Aún no hay registros guardados en la base de datos.")
         except Exception as e:
-            st.warning("⚠️ No olvides crear la tabla 'historial_ingresos' en Supabase para que este cuadro funcione.")
+            st.warning("⚠️ Recuerda crear la tabla 'historial_ingresos' en Supabase para que este cuadro funcione.")
 
 # --- PESTAÑA 7: RESUMEN ---
 with tab7:

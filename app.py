@@ -361,10 +361,16 @@ with tab4:
         else:
             df_inv = df_inv.fillna('')
             df_inv = df_inv.sort_values(by='sku', key=lambda col: col.map(clave_orden_natural)).reset_index(drop=True)
-        # --- REGLA DE CONFIDENCIALIDAD: OCULTAR COSTO ---
+            
+        # --- 1. GUARDAR LA COLUMNA COSTO EN SECRETO ---
+        # Extraemos los costos antes de borrarlos visualmente para que no se pierdan
+        df_costos_secretos = df_inv[['sku', 'costo']].copy() if 'costo' in df_inv.columns else pd.DataFrame(columns=['sku', 'costo'])
+            
+        # --- 2. REGLA DE CONFIDENCIALIDAD: OCULTAR COSTO A OPERARIOS ---
         if 'costo' in df_inv.columns:
             df_inv = df_inv.drop(columns=['costo'])
         # ------------------------------------------------
+        
         df_ie = st.data_editor(df_inv, num_rows="dynamic", use_container_width=True, height=400)
         
         if st.button("💾 Guardar Inventario"):
@@ -378,17 +384,24 @@ with tab4:
                 if 'stock_minimo' in df_il.columns: df_il['stock_minimo'] = pd.to_numeric(df_il['stock_minimo'], errors='coerce').fillna(0).astype(int)
                 if 'stock_ideal' in df_il.columns: df_il['stock_ideal'] = pd.to_numeric(df_il['stock_ideal'], errors='coerce').fillna(0).astype(int)
                 
+                # --- 3. EL TRUCO INVISIBLE: VOLVER A PEGAR LOS COSTOS ANTES DE GUARDAR ---
+                if not df_costos_secretos.empty:
+                    df_il = df_il.merge(df_costos_secretos, on='sku', how='left')
+                    df_il['costo'] = pd.to_numeric(df_il['costo'], errors='coerce').fillna(0.0)
+                # -------------------------------------------------------------------------
+                
                 try:
                     supabase.table("inventario").delete().neq("sku", "BORRAR_TODO").execute()
                     supabase.table("inventario").insert(df_il.to_dict('records')).execute()
-                    st.success("✅ Actualizado.")
+                    st.success("✅ Actualizado de forma segura. Costos protegidos.")
                     cargar_todo.clear()
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ Error guardando inventario: {e}")
             else:
                 st.warning("⚠️ No hay datos válidos para guardar.")
-       # --- NUEVO CUADRO DE REPOSICIÓN ---
+                
+        # --- NUEVO CUADRO DE REPOSICIÓN ---
         st.divider()
         st.subheader("🛒 Alertas de Reposición")
         

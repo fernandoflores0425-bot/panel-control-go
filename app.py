@@ -13,7 +13,6 @@ if 'limpiador_ingreso' not in st.session_state:
     st.session_state['limpiador_ingreso'] = 0
 if 'filas_erroneas' not in st.session_state:
     st.session_state['filas_erroneas'] = []
-# --- NUEVA LÍNEA PARA EL HISTORIAL ---
 if 'historial_ingresos_sesion' not in st.session_state:
     st.session_state['historial_ingresos_sesion'] = []
 
@@ -156,11 +155,9 @@ with tab1:
     else:
         df_base = pd.DataFrame(index=range(15), columns=columnas_base)
         
-    # --- NUEVAS LÍNEAS PARA EVITAR EL CHOQUE DE FORMATOS ---
     df_base['fecha_pedido'] = pd.to_datetime(df_base['fecha_pedido'], errors='coerce')
     df_base['fecha_entrega'] = pd.to_datetime(df_base['fecha_entrega'], errors='coerce')
     df_base['monto'] = pd.to_numeric(df_base['monto'], errors='coerce')
-    # --------------------------------------------------------
     
     df_editado = st.data_editor(
         df_base, 
@@ -196,12 +193,10 @@ with tab1:
                     pedidos_malos_df.append(row.to_dict())
                     continue
                 
-                # --- POKA-YOKE: VALIDACIÓN SELLER - BELA ---
                 if medio == "SELLER" and business != "BELA":
                     errores_registro.append(f"❌ **{nombre}**: El medio 'SELLER' solo se puede usar con el negocio 'BELA'. Corrige la celda.")
                     pedidos_malos_df.append(row.to_dict())
                     continue
-                # -------------------------------------------
                 
                 articulos_pedidos = decodificar_productos(producto)
                 skus_invalidos = [art['sku'] for art in articulos_pedidos if art['sku'] not in inventario_db]
@@ -264,6 +259,7 @@ with tab1:
             st.rerun() 
         else:
             st.warning("⚠️ Tabla vacía.")
+
 # --- PESTAÑA 2: RUTAS ---
 with tab2:
     st.header("Torre de Control de Despachos")
@@ -301,7 +297,21 @@ with tab2:
                             
                             altura_dinamica = min(500, (len(df_medio) * 35) + 40)
                             
-                            df_rutas = st.data_editor(df_estilo, key=f"ed_{medio}", height=altura_dinamica, disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "direccion", "producto", "business"], column_config={"id_pedido": None, "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general)}, use_container_width=True, hide_index=True)
+                            # AQUÍ SE APLICÓ EL FIX DE LOS DECIMALES AL MONTO
+                            df_rutas = st.data_editor(
+                                df_estilo, 
+                                key=f"ed_{medio}", 
+                                height=altura_dinamica, 
+                                disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "direccion", "producto", "business"], 
+                                column_config={
+                                    "id_pedido": None, 
+                                    "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general),
+                                    "monto": st.column_config.NumberColumn("Monto", format="%.2f")
+                                }, 
+                                use_container_width=True, 
+                                hide_index=True
+                            )
+                            
                             if st.button(f"Guardar - {medio}", key=f"btn_{medio}"):
                                 for index, row in df_rutas.iterrows():
                                     est_ant = df_medio.loc[index, 'estado']
@@ -327,7 +337,19 @@ with tab3:
             if busqueda: df_editar = df_editar[df_editar.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)]
             df_editar.insert(0, '🗑️ Eliminar', False)
             
-            df_edi = st.data_editor(df_editar.head(100), use_container_width=True, hide_index=True, disabled=["id_pedido"], column_config={"medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas), "🗑️ Eliminar": st.column_config.CheckboxColumn("Eliminar", default=False)})
+            # AQUÍ SE APLICÓ EL FIX DE LOS DECIMALES AL MONTO
+            df_edi = st.data_editor(
+                df_editar.head(100), 
+                use_container_width=True, 
+                hide_index=True, 
+                disabled=["id_pedido"], 
+                column_config={
+                    "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), 
+                    "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas), 
+                    "🗑️ Eliminar": st.column_config.CheckboxColumn("Eliminar", default=False),
+                    "monto": st.column_config.NumberColumn("Monto", format="%.2f")
+                }
+            )
             
             c1, c2 = st.columns(2)
             with c1:
@@ -363,7 +385,6 @@ with tab4:
             df_inv = df_inv.sort_values(by='sku', key=lambda col: col.map(clave_orden_natural)).reset_index(drop=True)
             
         # --- 1. GUARDAR LA COLUMNA COSTO EN SECRETO ---
-        # Extraemos los costos antes de borrarlos visualmente para que no se pierdan
         df_costos_secretos = df_inv[['sku', 'costo']].copy() if 'costo' in df_inv.columns else pd.DataFrame(columns=['sku', 'costo'])
             
         # --- 2. REGLA DE CONFIDENCIALIDAD: OCULTAR COSTO A OPERARIOS ---
@@ -406,26 +427,17 @@ with tab4:
         st.subheader("🛒 Alertas de Reposición")
         
         if not df_inv.empty:
-            # Aseguramos que todos los números existan y se lean correctamente
             df_inv['stock_actual'] = pd.to_numeric(df_inv['stock_actual'], errors='coerce').fillna(0)
             df_inv['stock_minimo'] = pd.to_numeric(df_inv.get('stock_minimo', 0), errors='coerce').fillna(0)
             df_inv['stock_ideal'] = pd.to_numeric(df_inv.get('stock_ideal', 0), errors='coerce').fillna(0)
             
-            # --- NUEVA REGLA: EXCLUIR PRODUCTOS DE PRUEBA O DESCONTINUADOS ---
-            # 1. ¿Está el stock por debajo del mínimo?
             condicion_stock_bajo = df_inv['stock_actual'] <= df_inv['stock_minimo']
-            # 2. ¿Es un producto que ya no queremos reponer? (mínimo e ideal en 0)
             condicion_descontinuado = (df_inv['stock_minimo'] == 0) & (df_inv['stock_ideal'] == 0)
             
-            # Aplicamos ambos filtros: Que tenga stock bajo PERO que NO (~) sea descontinuado
             df_reposicion = df_inv[condicion_stock_bajo & ~condicion_descontinuado].copy()
-            # -----------------------------------------------------------------
             
             if not df_reposicion.empty:
-                # Calculamos cuánto falta para llegar al ideal
                 df_reposicion['Faltante a Comprar'] = df_reposicion['stock_ideal'] - df_reposicion['stock_actual']
-                
-                # Si el cálculo da negativo, lo dejamos en 0
                 df_reposicion['Faltante a Comprar'] = df_reposicion['Faltante a Comprar'].apply(lambda x: int(x) if x > 0 else 0)
                 
                 columnas_mostrar = ['sku', 'nombre', 'stock_actual', 'stock_minimo', 'Faltante a Comprar']
@@ -452,7 +464,20 @@ with tab5:
                     cl = re.search(r'clave\s*:?\s*(\d{4})', obs).group(1) if re.search(r'clave\s*:?\s*(\d{4})', obs) else (re.search(r'\b\d{4}\b', obs).group() if re.search(r'\b\d{4}\b', obs) else "")
                     df_prov.at[idx, 'adelanto'], df_prov.at[idx, 'deuda'], df_prov.at[idx, 'clave'] = ad, m - ad, cl
                 
-                df_ps = st.data_editor(df_prov[['id_pedido', 'nombre', 'celular', 'monto', 'direccion', 'adelanto', 'deuda', 'clave', 'estado']], disabled=["id_pedido", "nombre", "celular", "monto", "direccion", "adelanto", "deuda", "clave"], column_config={"estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas)}, use_container_width=True, hide_index=True)
+                # AQUÍ SE APLICÓ EL FIX DE LOS DECIMALES A MONTO, ADELANTO Y DEUDA
+                df_ps = st.data_editor(
+                    df_prov[['id_pedido', 'nombre', 'celular', 'monto', 'direccion', 'adelanto', 'deuda', 'clave', 'estado']], 
+                    disabled=["id_pedido", "nombre", "celular", "monto", "direccion", "adelanto", "deuda", "clave"], 
+                    column_config={
+                        "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas),
+                        "monto": st.column_config.NumberColumn("Monto", format="%.2f"),
+                        "adelanto": st.column_config.NumberColumn("Adelanto", format="%.2f"),
+                        "deuda": st.column_config.NumberColumn("Deuda", format="%.2f")
+                    }, 
+                    use_container_width=True, 
+                    hide_index=True
+                )
+                
                 if st.button("💾 Guardar Shalom"):
                     for index, row in df_ps.iterrows():
                         est_ant = df_prov.loc[index, 'estado']
@@ -525,19 +550,15 @@ with tab6:
         with c_tit:
             st.subheader("📋 Historial de Ingresos")
         with c_filtro:
-            # Usamos la hora de Perú para que por defecto marque el día correcto
             fecha_peru_hoy = datetime.datetime.strptime(obtener_fecha_peru("%Y-%m-%d"), "%Y-%m-%d").date()
             fecha_historial = st.date_input("📅 Consultar fecha:", fecha_peru_hoy)
         
         try:
-            # Descargamos los últimos registros
             historial_db = supabase.table("historial_ingresos").select("*").order("fecha", desc=True).limit(2000).execute().data
             if historial_db:
                 df_historial = pd.DataFrame(historial_db)
-                # Convertimos la columna de texto a formato fecha para poder compararla con el calendario
                 df_historial['fecha_corta'] = pd.to_datetime(df_historial['fecha']).dt.date
                 
-                # Filtramos matemáticamente solo la fecha elegida
                 df_filtrado = df_historial[df_historial['fecha_corta'] == fecha_historial].copy()
                 
                 if not df_filtrado.empty:

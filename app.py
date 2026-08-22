@@ -5,8 +5,7 @@ import re
 from supabase import create_client, Client
 
 # --- 1. CONFIGURACIÓN VISUAL Y DE MEMORIA ---
-st.set_page_config(page_title="Control Go - Operaciones", layout="wide")
-
+st.set_page_config(page_title="Control Go - Operaciones", page_icon="logo.png", layout="wide")
 if 'limpiador_tab1' not in st.session_state:
     st.session_state['limpiador_tab1'] = 0
 if 'limpiador_ingreso' not in st.session_state:
@@ -124,7 +123,15 @@ def obtener_fecha_peru(formato="%Y-%m-%d"):
     hora_peru = datetime.datetime.utcnow() - datetime.timedelta(hours=5)
     return hora_peru.strftime(formato)
 
-st.title("📦 Panel de Control Operativo")
+# --- NUEVO TÍTULO CON LOGO ---
+col_logo, col_tit = st.columns([1, 15]) # Ajustamos el tamaño para que el logo no quite mucho espacio
+with col_logo:
+    try:
+        st.image("logo.png", width=60) # Reemplaza "logo.png" por el nombre exacto de tu archivo
+    except:
+        st.write("📦") # Si por algún error no encuentra la imagen, mostrará la cajita por defecto
+with col_tit:
+    st.title("Panel de Control Go")
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📝 Agendar Pedidos", "🚚 Rutas por Día", "✏️ Editar Pedidos", 
     "📊 Maestro de Inventario", "📦 Shalom (Provincias)", "📥 Ingreso Mercadería", "📈 Resumen del Día"

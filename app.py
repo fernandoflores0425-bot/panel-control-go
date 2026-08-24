@@ -60,7 +60,7 @@ if inv_global is None or ped_global is None:
     st.stop()
 
 # --- 4. VARIABLES GLOBALES Y FUNCIONES ---
-opciones_medio = ["MD", "ENTRE GO", "SELLER", "URB", "PROV", "ENTRE GO 2", "INDRIVER", "ENTREGATE", "TIENDA Y", "TIENDA C", "TIENDA S"]
+opciones_medio = ["MD", "ENTRE GO", "GSG", "SELLER", "URB", "PROV", "ENTRE GO 2", "INDRIVER", "ENTREGATE", "TIENDA Y", "TIENDA C", "TIENDA S"]
 opciones_business = ["MELI", "BELA", "WGO", "MGO", "VIA", "MELI2", "VEA"]
 opciones_estado_general = ["POR ARMAR", "ARMADO", "EN RUTA", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]
 opciones_estado_todas = ["POR ARMAR", "ARMADO", "EN RUTA", "POR RECOGER", "ENTREGADO", "ANULADO", "DEVOLUCION", "REPROGRAMADO"]

@@ -103,7 +103,12 @@ def parse_fecha(d_str):
         try: return datetime.datetime.strptime(d_str, "%d/%m/%Y")
         except: return datetime.datetime.min
 
-def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, producto_str):
+# NUEVO ESCUDO: Si el pedido decía "almacén", no devuelve el stock al anularse
+def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, producto_str, observaciones_str=""):
+    obs_baja = str(observaciones_str).lower()
+    if "almacen" in obs_baja or "almacén" in obs_baja:
+        return False # No devolvemos nada porque nunca se restó
+
     if estado_antiguo in ["POR ARMAR", "ARMADO", "REPROGRAMADO"] and estado_nuevo == "ANULADO":
         if inv_global:
             inventario_db = {item['sku']: item for item in inv_global}
@@ -113,8 +118,7 @@ def procesar_cambio_estado_con_stock(id_pedido, estado_antiguo, estado_nuevo, pr
                     stock_actual = inventario_db[art['sku']]['stock_actual']
                     nuevo_stock = stock_actual + art['cant']
                     supabase.table("inventario").update({"stock_actual": nuevo_stock}).eq("sku", art['sku']).execute()
-        return True 
-    return False
+    return True 
 
 def clave_orden_natural(sku):
     return [int(texto) if texto.isdigit() else texto.lower() for texto in re.split(r'(\d+)', str(sku))]
@@ -124,17 +128,19 @@ def obtener_fecha_peru(formato="%Y-%m-%d"):
     return hora_peru.strftime(formato)
 
 # --- NUEVO TÍTULO CON LOGO ---
-col_logo, col_tit = st.columns([1, 15]) # Ajustamos el tamaño para que el logo no quite mucho espacio
+col_logo, col_tit = st.columns([1, 15]) 
 with col_logo:
     try:
-        st.image("logo.png", width=60) # Reemplaza "logo.png" por el nombre exacto de tu archivo
+        st.image("logo.png", width=60) 
     except:
-        st.write("📦") # Si por algún error no encuentra la imagen, mostrará la cajita por defecto
+        st.write("📦") 
 with col_tit:
     st.title("Panel de Control Go")
+
+# ¡AQUÍ ESTÁ EL TRUCO! Intercambiamos el orden visual de tab2 y tab1 para que Rutas abra primero.
 tab2, tab1, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "🚚 Rutas por Día","📝 Agendar Pedidos", "✏️ Editar Pedidos", 
-    "📊 Inventario", "📦 Shalom (Provincias)", "📥 Ingreso Mercadería", "📈 Resumen del Día"
+    "🚚 Rutas por Día", "📝 Agendar Pedidos", "✏️ Editar Pedidos", 
+    "📊 Maestro de Inventario", "📦 Shalom (Provincias)", "📥 Ingreso Mercadería", "📈 Resumen del Día"
 ])
 
 # --- PESTAÑA 1: AGENDAR ---
@@ -194,6 +200,7 @@ with tab1:
                 medio = str(row['medio']).strip() if pd.notna(row['medio']) else ""
                 business = str(row['business']).strip() if pd.notna(row['business']) else ""
                 producto = str(row['producto']).strip()
+                observaciones = str(row['observaciones']).strip()
                 
                 if medio == "" or business == "":
                     errores_registro.append(f"❌ **{nombre}**: Faltó Medio o Business.")
@@ -213,8 +220,12 @@ with tab1:
                     continue
                 
                 pedidos_a_guardar.append(row)
-                for art in articulos_pedidos:
-                    inventario_db[art['sku']]['stock_actual'] -= art['cant']
+                
+                # --- AQUÍ ESTÁ EL DESCUENTO CONDICIONAL ---
+                obs_minusculas = observaciones.lower()
+                if "almacen" not in obs_minusculas and "almacén" not in obs_minusculas:
+                    for art in articulos_pedidos:
+                        inventario_db[art['sku']]['stock_actual'] -= art['cant']
             
             if pedidos_a_guardar:
                 ultimo_numero = 1000
@@ -243,10 +254,14 @@ with tab1:
                 try:
                     supabase.table("pedidos").insert(nuevos_registros).execute()
                     skus_actualizados = set()
+                    
+                    # Solo actualizamos la base de datos si el pedido NO dice almacén
                     for row in pedidos_a_guardar:
-                        for art in decodificar_productos(row['producto']):
-                            skus_actualizados.add(art['sku'])
-                            
+                        obs_minusculas = str(row['observaciones']).lower()
+                        if "almacen" not in obs_minusculas and "almacén" not in obs_minusculas:
+                            for art in decodificar_productos(row['producto']):
+                                skus_actualizados.add(art['sku'])
+                                
                     for sku in skus_actualizados:
                         nuevo_stock = inventario_db[sku]['stock_actual']
                         stock_minimo = inventario_db[sku].get('stock_minimo', 0)
@@ -304,7 +319,6 @@ with tab2:
                             
                             altura_dinamica = min(500, (len(df_medio) * 35) + 40)
                             
-                            # AQUÍ SE APLICÓ EL FIX DE LOS DECIMALES AL MONTO
                             df_rutas = st.data_editor(
                                 df_estilo, 
                                 key=f"ed_{medio}", 
@@ -322,8 +336,9 @@ with tab2:
                             if st.button(f"Guardar - {medio}", key=f"btn_{medio}"):
                                 for index, row in df_rutas.iterrows():
                                     est_ant = df_medio.loc[index, 'estado']
+                                    obs_str = df_medio.loc[index, 'observaciones']
                                     if row['estado'] != est_ant:
-                                        procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], row['producto'])
+                                        procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], row['producto'], obs_str)
                                         supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
                                 st.success("✅ Guardado.")
                                 cargar_todo.clear()
@@ -344,7 +359,6 @@ with tab3:
             if busqueda: df_editar = df_editar[df_editar.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)]
             df_editar.insert(0, '🗑️ Eliminar', False)
             
-            # AQUÍ SE APLICÓ EL FIX DE LOS DECIMALES AL MONTO
             df_edi = st.data_editor(
                 df_editar.head(100), 
                 use_container_width=True, 
@@ -364,7 +378,9 @@ with tab3:
                     for index, row in df_edi.iterrows():
                         if row['🗑️ Eliminar']: continue
                         est_ant = df_editar.loc[index, 'estado']
-                        if row['estado'] != est_ant: procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], row['producto'])
+                        obs_str = df_editar.loc[index, 'observaciones']
+                        if row['estado'] != est_ant: 
+                            procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], row['producto'], obs_str)
                         reg = row.drop('🗑️ Eliminar').to_dict()
                         supabase.table("pedidos").update(reg).eq("id_pedido", row['id_pedido']).execute()
                     st.success("✅ Guardado.")
@@ -391,13 +407,10 @@ with tab4:
             df_inv = df_inv.fillna('')
             df_inv = df_inv.sort_values(by='sku', key=lambda col: col.map(clave_orden_natural)).reset_index(drop=True)
             
-        # --- 1. GUARDAR LA COLUMNA COSTO EN SECRETO ---
         df_costos_secretos = df_inv[['sku', 'costo']].copy() if 'costo' in df_inv.columns else pd.DataFrame(columns=['sku', 'costo'])
             
-        # --- 2. REGLA DE CONFIDENCIALIDAD: OCULTAR COSTO A OPERARIOS ---
         if 'costo' in df_inv.columns:
             df_inv = df_inv.drop(columns=['costo'])
-        # ------------------------------------------------
         
         df_ie = st.data_editor(df_inv, num_rows="dynamic", use_container_width=True, height=400)
         
@@ -412,11 +425,9 @@ with tab4:
                 if 'stock_minimo' in df_il.columns: df_il['stock_minimo'] = pd.to_numeric(df_il['stock_minimo'], errors='coerce').fillna(0).astype(int)
                 if 'stock_ideal' in df_il.columns: df_il['stock_ideal'] = pd.to_numeric(df_il['stock_ideal'], errors='coerce').fillna(0).astype(int)
                 
-                # --- 3. EL TRUCO INVISIBLE: VOLVER A PEGAR LOS COSTOS ANTES DE GUARDAR ---
                 if not df_costos_secretos.empty:
                     df_il = df_il.merge(df_costos_secretos, on='sku', how='left')
                     df_il['costo'] = pd.to_numeric(df_il['costo'], errors='coerce').fillna(0.0)
-                # -------------------------------------------------------------------------
                 
                 try:
                     supabase.table("inventario").delete().neq("sku", "BORRAR_TODO").execute()
@@ -429,7 +440,6 @@ with tab4:
             else:
                 st.warning("⚠️ No hay datos válidos para guardar.")
                 
-        # --- NUEVO CUADRO DE REPOSICIÓN ---
         st.divider()
         st.subheader("🛒 Alertas de Reposición")
         
@@ -471,7 +481,6 @@ with tab5:
                     cl = re.search(r'clave\s*:?\s*(\d{4})', obs).group(1) if re.search(r'clave\s*:?\s*(\d{4})', obs) else (re.search(r'\b\d{4}\b', obs).group() if re.search(r'\b\d{4}\b', obs) else "")
                     df_prov.at[idx, 'adelanto'], df_prov.at[idx, 'deuda'], df_prov.at[idx, 'clave'] = ad, m - ad, cl
                 
-                # AQUÍ SE APLICÓ EL FIX DE LOS DECIMALES A MONTO, ADELANTO Y DEUDA
                 df_ps = st.data_editor(
                     df_prov[['id_pedido', 'nombre', 'celular', 'monto', 'direccion', 'adelanto', 'deuda', 'clave', 'estado']], 
                     disabled=["id_pedido", "nombre", "celular", "monto", "direccion", "adelanto", "deuda", "clave"], 
@@ -488,8 +497,9 @@ with tab5:
                 if st.button("💾 Guardar Shalom"):
                     for index, row in df_ps.iterrows():
                         est_ant = df_prov.loc[index, 'estado']
+                        obs_str = df_prov.loc[index, 'observaciones']
                         if row['estado'] != est_ant:
-                            procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], df_prov.loc[index, 'producto'])
+                            procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], df_prov.loc[index, 'producto'], obs_str)
                             supabase.table("pedidos").update({"estado": row['estado']}).eq("id_pedido", row['id_pedido']).execute()
                     st.success("✅ Guardado.")
                     cargar_todo.clear()
@@ -530,10 +540,8 @@ with tab6:
                         registros_historial = []
                         
                         for idx, row in df_v.iterrows(): 
-                            # 1. Sumar a la base de datos de inventario
                             supabase.table("inventario").update({"stock_actual": inv_db[row['sku']]['stock_actual'] + row['cantidad']}).eq("sku", row['sku']).execute()
                             
-                            # 2. Preparar el registro para la nueva tabla
                             registros_historial.append({
                                 "fecha": hora_actual,
                                 "sku": row['sku'],
@@ -541,7 +549,6 @@ with tab6:
                                 "cantidad": row['cantidad']
                             })
                         
-                        # 3. Guardar el historial de forma PERMANENTE en Supabase
                         supabase.table("historial_ingresos").insert(registros_historial).execute()
                         
                         st.success("✅ Stock sumado exitosamente.")
@@ -551,7 +558,6 @@ with tab6:
                     except Exception as e:
                         st.error(f"❌ Error sumando stock: {e}")
                         
-        # --- NUEVO CUADRO DE HISTORIAL (POR DÍA) ---
         st.divider()
         c_tit, c_filtro = st.columns([2, 1])
         with c_tit:

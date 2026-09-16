@@ -132,9 +132,9 @@ with col_logo:
         st.write("📦") # Si por algún error no encuentra la imagen, mostrará la cajita por defecto
 with col_tit:
     st.title("Panel de Control Go")
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "📝 Agendar Pedidos", "🚚 Rutas por Día", "✏️ Editar Pedidos", 
-    "📊 Maestro de Inventario", "📦 Shalom (Provincias)", "📥 Ingreso Mercadería", "📈 Resumen del Día"
+tab2, tab1, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "🚚 Rutas por Día","📝 Agendar Pedidos", "✏️ Editar Pedidos", 
+    "📊 Inventario", "📦 Shalom (Provincias)", "📥 Ingreso Mercadería", "📈 Resumen del Día"
 ])
 
 # --- PESTAÑA 1: AGENDAR ---

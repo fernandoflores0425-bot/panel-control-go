@@ -352,48 +352,200 @@ with tab2:
 # --- PESTAÑA 3: EDITAR ---
 with tab3:
     st.header("✏️ Editar Pedidos")
+
     if ped_global is not None:
         df_editar = pd.DataFrame(ped_global)
+
         if not df_editar.empty:
+
+            # Buscador
             busqueda = st.text_input("🔍 Buscar pedido:")
-            if busqueda: df_editar = df_editar[df_editar.astype(str).apply(lambda x: x.str.contains(busqueda, case=False)).any(axis=1)]
+
+            if busqueda:
+                df_editar = df_editar[
+                    df_editar.astype(str).apply(
+                        lambda x: x.str.contains(busqueda, case=False)
+                    ).any(axis=1)
+                ]
+
+            # Columna para seleccionar pedidos a eliminar
             df_editar.insert(0, '🗑️ Eliminar', False)
-            
+
+            # Editor
             df_edi = st.data_editor(
-                df_editar.head(100), 
-                use_container_width=True, 
-                hide_index=True, 
-                disabled=["id_pedido"], 
+                df_editar.head(100),
+                use_container_width=True,
+                hide_index=True,
+                disabled=["id_pedido"],
                 column_config={
-                    "medio": st.column_config.SelectboxColumn("Medio", options=opciones_medio), 
-                    "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_todas), 
-                    "🗑️ Eliminar": st.column_config.CheckboxColumn("Eliminar", default=False),
-                    "monto": st.column_config.NumberColumn("Monto", format="%.2f")
+                    "medio": st.column_config.SelectboxColumn(
+                        "Medio",
+                        options=opciones_medio
+                    ),
+                    "estado": st.column_config.SelectboxColumn(
+                        "Estado",
+                        options=opciones_estado_todas
+                    ),
+                    "🗑️ Eliminar": st.column_config.CheckboxColumn(
+                        "Eliminar",
+                        default=False
+                    ),
+                    "monto": st.column_config.NumberColumn(
+                        "Monto",
+                        format="%.2f"
+                    )
                 }
             )
-            
+
             c1, c2 = st.columns(2)
+
+            # ==========================================
+            # GUARDAR EDICIONES
+            # ==========================================
             with c1:
-                if st.button("💾 Guardar Ediciones", use_container_width=True):
-                    for index, row in df_edi.iterrows():
-                        if row['🗑️ Eliminar']: continue
-                        est_ant = df_editar.loc[index, 'estado']
-                        obs_str = df_editar.loc[index, 'observaciones']
-                        if row['estado'] != est_ant: 
-                            procesar_cambio_estado_con_stock(row['id_pedido'], est_ant, row['estado'], row['producto'], obs_str)
-                        reg = row.drop('🗑️ Eliminar').to_dict()
-                        supabase.table("pedidos").update(reg).eq("id_pedido", row['id_pedido']).execute()
-                    st.success("✅ Guardado.")
-                    cargar_todo.clear()
-                    st.rerun()
+
+                if st.button(
+                    "💾 Guardar Ediciones",
+                    use_container_width=True
+                ):
+
+                    try:
+
+                        for index, row in df_edi.iterrows():
+
+                            # Si está marcado para eliminar,
+                            # no hacemos modificaciones aquí.
+                            if row['🗑️ Eliminar']:
+                                continue
+
+                            id_pedido = str(row['id_pedido'])
+
+                            # Datos anteriores
+                            est_ant = df_editar.loc[index, 'estado']
+                            obs_str = df_editar.loc[index, 'observaciones']
+
+                            # ------------------------------------------
+                            # CONTROL DE CAMBIO DE ESTADO Y STOCK
+                            # ------------------------------------------
+                            if row['estado'] != est_ant:
+
+                                procesar_cambio_estado_con_stock(
+                                    id_pedido,
+                                    est_ant,
+                                    row['estado'],
+                                    row['producto'],
+                                    obs_str
+                                )
+
+                            # ------------------------------------------
+                            # PREPARAR DATOS PARA SUPABASE
+                            # ------------------------------------------
+
+                            # No mandamos la columna Eliminar
+                            # ni id_pedido porque el ID no debe cambiar.
+                            reg = row.drop(
+                                ['🗑️ Eliminar', 'id_pedido']
+                            ).to_dict()
+
+                            # ------------------------------------------
+                            # LIMPIAR TIPOS DE PANDAS / NUMPY
+                            # ------------------------------------------
+                            # Supabase necesita valores compatibles
+                            # con JSON: str, int, float, bool o None.
+
+                            for campo, valor in reg.items():
+
+                                # NaN / pd.NA / NaT
+                                if pd.isna(valor):
+                                    reg[campo] = None
+
+                                # Fechas
+                                elif isinstance(
+                                    valor,
+                                    (
+                                        pd.Timestamp,
+                                        datetime.datetime,
+                                        datetime.date
+                                    )
+                                ):
+                                    reg[campo] = valor.strftime("%Y-%m-%d")
+
+                                # Tipos NumPy
+                                elif hasattr(valor, "item"):
+                                    reg[campo] = valor.item()
+
+                            # ------------------------------------------
+                            # ACTUALIZAR PEDIDO
+                            # ------------------------------------------
+
+                            supabase.table("pedidos").update(
+                                reg
+                            ).eq(
+                                "id_pedido",
+                                id_pedido
+                            ).execute()
+
+                        st.success("✅ Cambios guardados correctamente.")
+
+                        cargar_todo.clear()
+                        st.rerun()
+
+                    except Exception as e:
+
+                        st.error(
+                            f"❌ Error al guardar los cambios: {e}"
+                        )
+
+            # ==========================================
+            # ELIMINAR PEDIDOS
+            # ==========================================
             with c2:
-                if st.button("🗑️ Eliminar Seleccionados", use_container_width=True):
-                    sel = df_edi[df_edi['🗑️ Eliminar'] == True]
-                    for index, row in sel.iterrows(): supabase.table("pedidos").delete().eq("id_pedido", row['id_pedido']).execute()
-                    st.success("✅ Eliminados.")
-                    cargar_todo.clear()
-                    st.rerun()
+
+                if st.button(
+                    "🗑️ Eliminar Seleccionados",
+                    use_container_width=True
+                ):
+
+                    try:
+
+                        sel = df_edi[
+                            df_edi['🗑️ Eliminar'] == True
+                        ]
+
+                        if sel.empty:
+
+                            st.warning(
+                                "⚠️ No seleccionaste ningún pedido."
+                            )
+
+                        else:
+
+                            for index, row in sel.iterrows():
+
+                                id_pedido = str(row['id_pedido'])
+
+                                supabase.table(
+                                    "pedidos"
+                                ).delete().eq(
+                                    "id_pedido",
+                                    id_pedido
+                                ).execute()
+
+                            st.success(
+                                f"✅ {len(sel)} pedido(s) eliminado(s)."
+                            )
+
+                            cargar_todo.clear()
+                            st.rerun()
+
+                    except Exception as e:
+
+                        st.error(
+                            f"❌ Error al eliminar pedidos: {e}"
+                        )
+
         else:
+
             st.info("No hay pedidos para editar.")
 
 # --- PESTAÑA 4: INVENTARIO ---

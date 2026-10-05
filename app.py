@@ -353,7 +353,119 @@ with tab2:
 with tab3:
     st.header("✏️ Editar Pedidos")
 
+    # ==========================================================
+    # MENSAJES DESPUÉS DE GUARDAR / ELIMINAR
+    # Se muestran arriba para que sean fáciles de ver
+    # ==========================================================
+
+    if st.session_state.get('msg_edicion_exitosa', False):
+
+        st.success("✅ Cambios guardados correctamente.")
+
+        movimientos = st.session_state.get(
+            'movimientos_edicion',
+            []
+        )
+
+        cantidad_editados = st.session_state.get(
+            'cantidad_editados',
+            0
+        )
+
+        st.caption(
+            f"✏️ {cantidad_editados} pedido(s) actualizado(s)."
+        )
+
+        if movimientos:
+
+            st.info("📦 Movimientos realizados en inventario:")
+
+            pedido_actual = None
+
+            for mov in movimientos:
+
+                if mov["pedido"] != pedido_actual:
+                    st.markdown(
+                        f"**Pedido {mov['pedido']}**"
+                    )
+                    pedido_actual = mov["pedido"]
+
+                signo = "+" if mov["ajuste"] > 0 else ""
+
+                st.write(
+                    f"• {mov['sku']}: "
+                    f"{mov['antes']} → "
+                    f"{mov['despues']} "
+                    f"({signo}{mov['ajuste']})"
+                )
+
+        else:
+            st.info("ℹ️ No hubo movimientos de inventario.")
+
+        del st.session_state['msg_edicion_exitosa']
+
+        if 'movimientos_edicion' in st.session_state:
+            del st.session_state['movimientos_edicion']
+
+        if 'cantidad_editados' in st.session_state:
+            del st.session_state['cantidad_editados']
+
+
+    if 'msg_eliminacion_exitosa' in st.session_state:
+
+        cantidad_eliminados = st.session_state[
+            'msg_eliminacion_exitosa'
+        ]
+
+        st.success(
+            f"✅ {cantidad_eliminados} pedido(s) "
+            f"eliminado(s) correctamente."
+        )
+
+        movimientos = st.session_state.get(
+            'movimientos_eliminacion',
+            []
+        )
+
+        if movimientos:
+
+            st.info("📦 Stock devuelto al inventario:")
+
+            pedido_actual = None
+
+            for mov in movimientos:
+
+                if mov["pedido"] != pedido_actual:
+                    st.markdown(
+                        f"**Pedido {mov['pedido']}**"
+                    )
+                    pedido_actual = mov["pedido"]
+
+                st.write(
+                    f"• {mov['sku']}: "
+                    f"{mov['antes']} → "
+                    f"{mov['despues']} "
+                    f"(+{mov['ajuste']})"
+                )
+
+        else:
+            st.info(
+                "ℹ️ El pedido eliminado no requería "
+                "devolver stock."
+            )
+
+        del st.session_state['msg_eliminacion_exitosa']
+
+        if 'movimientos_eliminacion' in st.session_state:
+            del st.session_state['movimientos_eliminacion']
+
+
+    # ==========================================================
+    # CARGAR PEDIDOS
+    # ==========================================================
+
     if ped_global is not None:
+
         df_editar = pd.DataFrame(ped_global)
 
         if not df_editar.empty:
@@ -361,26 +473,47 @@ with tab3:
             # ==============================
             # BUSCADOR
             # ==============================
+
             busqueda = st.text_input("🔍 Buscar pedido:")
 
             if busqueda:
+
                 df_editar = df_editar[
                     df_editar.astype(str).apply(
-                        lambda x: x.str.contains(busqueda, case=False)
+                        lambda x: x.str.contains(
+                            busqueda,
+                            case=False
+                        )
                     ).any(axis=1)
                 ]
 
-            # Columna para eliminar
-            df_editar.insert(0, '🗑️ Eliminar', False)
+            # IMPORTANTE:
+            # Resetear índice después del buscador
+            # evita problemas al detectar filas editadas.
+            df_editar = (
+                df_editar
+                .head(100)
+                .reset_index(drop=True)
+            )
+
+            df_editar.insert(
+                0,
+                '🗑️ Eliminar',
+                False
+            )
 
             # ==============================
             # EDITOR
             # ==============================
+
+            editor_key = "editor_editar_pedidos"
+
             df_edi = st.data_editor(
-                df_editar.head(100),
+                df_editar,
                 use_container_width=True,
                 hide_index=True,
                 disabled=["id_pedido"],
+                key=editor_key,
                 column_config={
                     "medio": st.column_config.SelectboxColumn(
                         "Medio",
@@ -390,29 +523,41 @@ with tab3:
                         "Estado",
                         options=opciones_estado_todas
                     ),
-                    "🗑️ Eliminar": st.column_config.CheckboxColumn(
-                        "Eliminar",
-                        default=False
-                    ),
-                    "monto": st.column_config.NumberColumn(
-                        "Monto",
-                        format="%.2f"
-                    )
+                    "🗑️ Eliminar":
+                        st.column_config.CheckboxColumn(
+                            "Eliminar",
+                            default=False
+                        ),
+                    "monto":
+                        st.column_config.NumberColumn(
+                            "Monto",
+                            format="%.2f"
+                        )
                 }
             )
 
-            # ==============================
-            # FUNCIONES INTERNAS DE STOCK
-            # ==============================
-            def pedido_afecta_stock(estado, observaciones):
+
+            # ==================================================
+            # FUNCIONES DE STOCK
+            # ==================================================
+
+            def pedido_afecta_stock(
+                estado,
+                observaciones
+            ):
 
                 obs = str(observaciones).lower()
 
-                # Los pedidos de almacén nunca descuentan stock
-                if "almacen" in obs or "almacén" in obs:
+                # Pedido de almacén:
+                # nunca descontó inventario.
+                if (
+                    "almacen" in obs
+                    or "almacén" in obs
+                ):
                     return False
 
-                # Un pedido anulado ya no tiene stock reservado
+                # Pedido anulado:
+                # ya no tiene stock reservado.
                 if estado == "ANULADO":
                     return False
 
@@ -423,12 +568,17 @@ with tab3:
 
                 resultado = {}
 
-                for art in decodificar_productos(producto_str):
+                for art in decodificar_productos(
+                    producto_str
+                ):
 
                     sku = art['sku']
                     cant = art['cant']
 
-                    resultado[sku] = resultado.get(sku, 0) + cant
+                    resultado[sku] = (
+                        resultado.get(sku, 0)
+                        + cant
+                    )
 
                 return resultado
 
@@ -445,20 +595,28 @@ with tab3:
                 stock_antes = {}
                 stock_despues = {}
 
-                # Stock que estaba reservado ANTES
+                # ==========================
+                # ANTES
+                # ==========================
+
                 if pedido_afecta_stock(
                     estado_anterior,
                     observaciones_anteriores
                 ):
+
                     stock_antes = productos_a_dict(
                         producto_anterior
                     )
 
-                # Stock que debe quedar reservado DESPUÉS
+                # ==========================
+                # DESPUÉS
+                # ==========================
+
                 if pedido_afecta_stock(
                     estado_nuevo,
                     observaciones_nuevas
                 ):
+
                     stock_despues = productos_a_dict(
                         producto_nuevo
                     )
@@ -472,13 +630,19 @@ with tab3:
 
                 for sku in todos_skus:
 
-                    cantidad_antes = stock_antes.get(sku, 0)
-                    cantidad_despues = stock_despues.get(sku, 0)
+                    cantidad_antes = stock_antes.get(
+                        sku,
+                        0
+                    )
 
-                    # Positivo = devolver stock
-                    # Negativo = descontar stock
+                    cantidad_despues = stock_despues.get(
+                        sku,
+                        0
+                    )
+
                     diferencia = (
-                        cantidad_antes - cantidad_despues
+                        cantidad_antes
+                        - cantidad_despues
                     )
 
                     if diferencia != 0:
@@ -487,14 +651,41 @@ with tab3:
                 return ajustes
 
 
-            # ==============================
+            # ==================================================
+            # DETECTAR FILAS REALMENTE MODIFICADAS
+            # ==================================================
+
+            editor_state = st.session_state.get(
+                editor_key,
+                {}
+            )
+
+            filas_editadas = editor_state.get(
+                "edited_rows",
+                {}
+            )
+
+            # Streamlit normalmente devuelve:
+            #
+            # {
+            #    3: {"producto": "1 MR25"},
+            #    7: {"medio": "MD"}
+            # }
+            #
+            # Es decir, SOLO las filas modificadas.
+
+
+            # ==================================================
             # BOTONES
-            # ==============================
+            # ==================================================
+
             c1, c2 = st.columns(2)
+
 
             # ==================================================
             # GUARDAR EDICIONES
             # ==================================================
+
             with c1:
 
                 if st.button(
@@ -504,234 +695,416 @@ with tab3:
 
                     try:
 
-                        inventario_db = {
-                            item['sku']: item
-                            for item in inv_global
-                        } if inv_global else {}
+                        # ==========================
+                        # NO HAY CAMBIOS
+                        # ==========================
 
-                        # Stock que iremos modificando temporalmente
-                        stock_temporal = {
-                            sku: item['stock_actual']
-                            for sku, item in inventario_db.items()
-                        }
+                        # Excluir cambios que solamente sean
+                        # marcar/desmarcar "Eliminar".
+                        filas_con_cambios_reales = {}
 
-                        pedidos_actualizar = []
+                        for idx, cambios in filas_editadas.items():
 
-                        # AQUÍ GUARDAREMOS LOS AVISOS
-                        movimientos_stock = []
+                            cambios_reales = {
+                                campo: valor
+                                for campo, valor
+                                in cambios.items()
+                                if campo != "🗑️ Eliminar"
+                            }
 
-                        hubo_error = False
+                            if cambios_reales:
 
-                        for index, row in df_edi.iterrows():
+                                filas_con_cambios_reales[
+                                    int(idx)
+                                ] = cambios_reales
 
-                            if row['🗑️ Eliminar']:
-                                continue
 
-                            id_pedido = str(row['id_pedido'])
+                        if not filas_con_cambios_reales:
 
-                            # ==============================
-                            # DATOS ANTERIORES
-                            # ==============================
-                            producto_anterior = str(
-                                df_editar.loc[index, 'producto']
+                            st.warning(
+                                "⚠️ No realizaste ningún cambio "
+                                "para guardar."
                             )
 
-                            estado_anterior = str(
-                                df_editar.loc[index, 'estado']
-                            )
+                        else:
 
-                            observaciones_anteriores = str(
-                                df_editar.loc[
-                                    index,
-                                    'observaciones'
-                                ]
-                            )
+                            # ==========================
+                            # INVENTARIO ACTUAL
+                            # ==========================
 
-                            # ==============================
-                            # DATOS NUEVOS
-                            # ==============================
-                            producto_nuevo = (
-                                str(row['producto']).strip()
-                                if pd.notna(row['producto'])
-                                else ""
-                            )
+                            inventario_db = {
+                                item['sku']: item
+                                for item in inv_global
+                            } if inv_global else {}
 
-                            estado_nuevo = (
-                                str(row['estado']).strip()
-                                if pd.notna(row['estado'])
-                                else ""
-                            )
+                            stock_temporal = {
+                                sku: item['stock_actual']
+                                for sku, item
+                                in inventario_db.items()
+                            }
 
-                            observaciones_nuevas = (
-                                str(row['observaciones'])
-                                if pd.notna(row['observaciones'])
-                                else ""
-                            )
+                            pedidos_actualizar = []
 
-                            # ==============================
-                            # VALIDAR SKU
-                            # ==============================
-                            productos_nuevos = productos_a_dict(
-                                producto_nuevo
-                            )
+                            movimientos_stock = []
 
-                            skus_invalidos = [
-                                sku
-                                for sku in productos_nuevos
-                                if sku not in inventario_db
-                            ]
+                            # Guardamos SOLO los SKU
+                            # que realmente cambian.
+                            skus_afectados = set()
 
-                            if skus_invalidos:
+                            hubo_error = False
 
-                                st.error(
-                                    f"❌ Pedido {id_pedido}: "
-                                    f"el SKU no existe: "
-                                    f"{', '.join(skus_invalidos)}"
+
+                            # ==========================
+                            # SOLO RECORRER FILAS EDITADAS
+                            # ==========================
+
+                            for index in (
+                                filas_con_cambios_reales.keys()
+                            ):
+
+                                # Fila anterior
+                                row_anterior = (
+                                    df_editar.iloc[index]
                                 )
 
-                                hubo_error = True
-                                break
+                                # Fila nueva
+                                row_nueva = (
+                                    df_edi.iloc[index]
+                                )
 
-                            # ==============================
-                            # CALCULAR AJUSTES
-                            # ==============================
-                            ajustes = calcular_ajuste_stock(
-                                producto_anterior,
-                                estado_anterior,
-                                observaciones_anteriores,
-                                producto_nuevo,
-                                estado_nuevo,
-                                observaciones_nuevas
-                            )
+                                id_pedido = str(
+                                    row_anterior[
+                                        'id_pedido'
+                                    ]
+                                )
 
-                            # ==============================
-                            # APLICAR AJUSTES Y REGISTRAR AVISO
-                            # ==============================
-                            for sku, ajuste in ajustes.items():
+                                # ==========================
+                                # DATOS ANTERIORES
+                                # ==========================
 
-                                if sku not in stock_temporal:
+                                producto_anterior = (
+                                    str(
+                                        row_anterior[
+                                            'producto'
+                                        ]
+                                    )
+                                )
+
+                                estado_anterior = (
+                                    str(
+                                        row_anterior[
+                                            'estado'
+                                        ]
+                                    )
+                                )
+
+                                observaciones_anteriores = (
+                                    str(
+                                        row_anterior[
+                                            'observaciones'
+                                        ]
+                                    )
+                                )
+
+                                # ==========================
+                                # DATOS NUEVOS
+                                # ==========================
+
+                                producto_nuevo = (
+                                    str(
+                                        row_nueva[
+                                            'producto'
+                                        ]
+                                    ).strip()
+                                    if pd.notna(
+                                        row_nueva[
+                                            'producto'
+                                        ]
+                                    )
+                                    else ""
+                                )
+
+                                estado_nuevo = (
+                                    str(
+                                        row_nueva[
+                                            'estado'
+                                        ]
+                                    ).strip()
+                                    if pd.notna(
+                                        row_nueva[
+                                            'estado'
+                                        ]
+                                    )
+                                    else ""
+                                )
+
+                                observaciones_nuevas = (
+                                    str(
+                                        row_nueva[
+                                            'observaciones'
+                                        ]
+                                    )
+                                    if pd.notna(
+                                        row_nueva[
+                                            'observaciones'
+                                        ]
+                                    )
+                                    else ""
+                                )
+
+
+                                # ==========================
+                                # VALIDAR SKU NUEVOS
+                                # ==========================
+
+                                productos_nuevos = (
+                                    productos_a_dict(
+                                        producto_nuevo
+                                    )
+                                )
+
+                                skus_invalidos = [
+                                    sku
+                                    for sku
+                                    in productos_nuevos
+                                    if sku
+                                    not in inventario_db
+                                ]
+
+                                if skus_invalidos:
 
                                     st.error(
-                                        f"❌ No se encontró el SKU "
-                                        f"{sku} en inventario."
+                                        f"❌ Pedido "
+                                        f"{id_pedido}: "
+                                        f"el SKU no existe: "
+                                        f"{', '.join(skus_invalidos)}"
                                     )
 
                                     hubo_error = True
                                     break
 
-                                # Stock antes de este movimiento
-                                stock_antes = stock_temporal[sku]
 
-                                # Aplicamos movimiento
-                                stock_temporal[sku] += ajuste
+                                # ==========================
+                                # CALCULAR STOCK
+                                # ==========================
 
-                                # Stock después
-                                stock_despues = stock_temporal[sku]
-
-                                # Guardamos información para mostrarla
-                                movimientos_stock.append({
-                                    "pedido": id_pedido,
-                                    "sku": sku,
-                                    "antes": stock_antes,
-                                    "despues": stock_despues,
-                                    "ajuste": ajuste
-                                })
-
-                            if hubo_error:
-                                break
-
-                            # ==============================
-                            # PREPARAR REGISTRO SUPABASE
-                            # ==============================
-                            reg = row.drop(
-                                ['🗑️ Eliminar', 'id_pedido']
-                            ).to_dict()
-
-                            # Limpiar valores Pandas / NumPy
-                            for campo, valor in reg.items():
-
-                                if pd.isna(valor):
-                                    reg[campo] = None
-
-                                elif isinstance(
-                                    valor,
-                                    (
-                                        pd.Timestamp,
-                                        datetime.datetime,
-                                        datetime.date
+                                ajustes = (
+                                    calcular_ajuste_stock(
+                                        producto_anterior,
+                                        estado_anterior,
+                                        observaciones_anteriores,
+                                        producto_nuevo,
+                                        estado_nuevo,
+                                        observaciones_nuevas
                                     )
+                                )
+
+
+                                for sku, ajuste in (
+                                    ajustes.items()
                                 ):
-                                    reg[campo] = valor.strftime(
-                                        "%Y-%m-%d"
+
+                                    if (
+                                        sku
+                                        not in stock_temporal
+                                    ):
+
+                                        st.error(
+                                            f"❌ No se encontró "
+                                            f"el SKU {sku} "
+                                            f"en inventario."
+                                        )
+
+                                        hubo_error = True
+                                        break
+
+                                    stock_antes = (
+                                        stock_temporal[
+                                            sku
+                                        ]
                                     )
 
-                                elif hasattr(valor, "item"):
-                                    reg[campo] = valor.item()
+                                    stock_temporal[
+                                        sku
+                                    ] += ajuste
 
-                            pedidos_actualizar.append({
-                                "id_pedido": id_pedido,
-                                "datos": reg
-                            })
+                                    stock_despues = (
+                                        stock_temporal[
+                                            sku
+                                        ]
+                                    )
 
-                        # ==========================================
-                        # GUARDAR SI TODO ESTÁ CORRECTO
-                        # ==========================================
-                        if not hubo_error:
+                                    skus_afectados.add(
+                                        sku
+                                    )
 
-                            # Actualizar pedidos
-                            for pedido in pedidos_actualizar:
+                                    movimientos_stock.append({
+                                        "pedido":
+                                            id_pedido,
+                                        "sku":
+                                            sku,
+                                        "antes":
+                                            stock_antes,
+                                        "despues":
+                                            stock_despues,
+                                        "ajuste":
+                                            ajuste
+                                    })
 
-                                supabase.table(
-                                    "pedidos"
-                                ).update(
-                                    pedido["datos"]
-                                ).eq(
-                                    "id_pedido",
-                                    pedido["id_pedido"]
-                                ).execute()
 
-                            # Actualizar inventario
-                            for sku, nuevo_stock in stock_temporal.items():
+                                if hubo_error:
+                                    break
 
-                                stock_original = inventario_db[
-                                    sku
-                                ]['stock_actual']
 
-                                if nuevo_stock != stock_original:
+                                # ==========================
+                                # MUY IMPORTANTE:
+                                # ENVIAR SOLO CAMPOS EDITADOS
+                                # ==========================
+
+                                cambios = (
+                                    filas_con_cambios_reales[
+                                        index
+                                    ].copy()
+                                )
+
+                                reg = {}
+
+                                for campo, valor in (
+                                    cambios.items()
+                                ):
+
+                                    # Nunca modificar ID
+                                    if campo == "id_pedido":
+                                        continue
+
+                                    if pd.isna(valor):
+                                        reg[campo] = None
+
+                                    elif isinstance(
+                                        valor,
+                                        (
+                                            pd.Timestamp,
+                                            datetime.datetime,
+                                            datetime.date
+                                        )
+                                    ):
+
+                                        reg[campo] = (
+                                            valor.strftime(
+                                                "%Y-%m-%d"
+                                            )
+                                        )
+
+                                    elif hasattr(
+                                        valor,
+                                        "item"
+                                    ):
+
+                                        reg[campo] = (
+                                            valor.item()
+                                        )
+
+                                    else:
+
+                                        reg[campo] = valor
+
+
+                                if reg:
+
+                                    pedidos_actualizar.append({
+                                        "id_pedido":
+                                            id_pedido,
+                                        "datos":
+                                            reg
+                                    })
+
+
+                            # ==========================
+                            # GUARDAR
+                            # ==========================
+
+                            if not hubo_error:
+
+                                # --------------------------
+                                # 1. SOLO PEDIDOS EDITADOS
+                                # --------------------------
+
+                                for pedido in (
+                                    pedidos_actualizar
+                                ):
+
+                                    supabase.table(
+                                        "pedidos"
+                                    ).update(
+                                        pedido["datos"]
+                                    ).eq(
+                                        "id_pedido",
+                                        pedido[
+                                            "id_pedido"
+                                        ]
+                                    ).execute()
+
+
+                                # --------------------------
+                                # 2. SOLO SKU AFECTADOS
+                                # --------------------------
+
+                                for sku in skus_afectados:
+
+                                    nuevo_stock = (
+                                        stock_temporal[
+                                            sku
+                                        ]
+                                    )
 
                                     supabase.table(
                                         "inventario"
                                     ).update({
-                                        "stock_actual": nuevo_stock
+                                        "stock_actual":
+                                            nuevo_stock
                                     }).eq(
                                         "sku",
                                         sku
                                     ).execute()
 
-                            # ==============================
-                            # GUARDAR MENSAJES PARA MOSTRAR
-                            # DESPUÉS DEL RERUN
-                            # ==============================
-                            st.session_state[
-                                'msg_edicion_exitosa'
-                            ] = True
 
-                            st.session_state[
-                                'movimientos_edicion'
-                            ] = movimientos_stock
+                                # --------------------------
+                                # MENSAJE
+                                # --------------------------
 
-                            cargar_todo.clear()
-                            st.rerun()
+                                st.session_state[
+                                    'msg_edicion_exitosa'
+                                ] = True
+
+                                st.session_state[
+                                    'movimientos_edicion'
+                                ] = movimientos_stock
+
+                                st.session_state[
+                                    'cantidad_editados'
+                                ] = len(
+                                    pedidos_actualizar
+                                )
+
+
+                                # Recargar datos confirmados
+                                cargar_todo.clear()
+
+                                st.rerun()
+
 
                     except Exception as e:
 
                         st.error(
-                            f"❌ Error al guardar los cambios: {e}"
+                            f"❌ Error al guardar "
+                            f"los cambios: {e}"
                         )
 
+
             # ==================================================
-            # ELIMINAR PEDIDOS
+            # ELIMINAR SELECCIONADOS
             # ==================================================
+
             with c2:
 
                 if st.button(
@@ -742,13 +1115,17 @@ with tab3:
                     try:
 
                         sel = df_edi[
-                            df_edi['🗑️ Eliminar'] == True
+                            df_edi[
+                                '🗑️ Eliminar'
+                            ] == True
                         ]
+
 
                         if sel.empty:
 
                             st.warning(
-                                "⚠️ No seleccionaste ningún pedido."
+                                "⚠️ No seleccionaste "
+                                "ningún pedido."
                             )
 
                         else:
@@ -758,121 +1135,163 @@ with tab3:
                                 for item in inv_global
                             } if inv_global else {}
 
+
                             stock_temporal = {
                                 sku: item['stock_actual']
-                                for sku, item in inventario_db.items()
+                                for sku, item
+                                in inventario_db.items()
                             }
+
 
                             pedidos_eliminar = []
 
                             movimientos_eliminacion = []
 
+                            skus_afectados = set()
+
                             hubo_error = False
 
-                            for index, row in sel.iterrows():
+
+                            # ==========================
+                            # SOLO PEDIDOS SELECCIONADOS
+                            # ==========================
+
+                            for index, row in (
+                                sel.iterrows()
+                            ):
 
                                 id_pedido = str(
-                                    row['id_pedido']
+                                    row[
+                                        'id_pedido'
+                                    ]
                                 )
 
                                 producto = str(
-                                    df_editar.loc[
-                                        index,
+                                    row[
                                         'producto'
                                     ]
                                 )
 
                                 estado = str(
-                                    df_editar.loc[
-                                        index,
+                                    row[
                                         'estado'
                                     ]
                                 )
 
-                                observaciones = str(
-                                    df_editar.loc[
-                                        index,
-                                        'observaciones'
-                                    ]
+                                observaciones = (
+                                    str(
+                                        row[
+                                            'observaciones'
+                                        ]
+                                    )
                                 )
 
-                                # ==============================
-                                # DEVOLVER STOCK SI CORRESPONDE
-                                # ==============================
+
+                                # ==========================
+                                # DEVOLVER STOCK
+                                # ==========================
+
                                 if pedido_afecta_stock(
                                     estado,
                                     observaciones
                                 ):
 
-                                    productos = productos_a_dict(
-                                        producto
+                                    productos = (
+                                        productos_a_dict(
+                                            producto
+                                        )
                                     )
 
-                                    for sku, cantidad in productos.items():
 
-                                        if sku not in stock_temporal:
+                                    for sku, cantidad in (
+                                        productos.items()
+                                    ):
+
+                                        if (
+                                            sku
+                                            not in stock_temporal
+                                        ):
 
                                             st.error(
                                                 f"❌ Pedido "
                                                 f"{id_pedido}: "
-                                                f"SKU {sku} no existe."
+                                                f"SKU {sku} "
+                                                f"no existe."
                                             )
 
                                             hubo_error = True
                                             break
 
-                                        stock_antes = stock_temporal[
-                                            sku
-                                        ]
+
+                                        stock_antes = (
+                                            stock_temporal[
+                                                sku
+                                            ]
+                                        )
 
                                         stock_temporal[
                                             sku
                                         ] += cantidad
 
-                                        stock_despues = stock_temporal[
+                                        stock_despues = (
+                                            stock_temporal[
+                                                sku
+                                            ]
+                                        )
+
+                                        skus_afectados.add(
                                             sku
-                                        ]
+                                        )
 
                                         movimientos_eliminacion.append({
-                                            "pedido": id_pedido,
-                                            "sku": sku,
-                                            "antes": stock_antes,
-                                            "despues": stock_despues,
-                                            "ajuste": cantidad
+                                            "pedido":
+                                                id_pedido,
+                                            "sku":
+                                                sku,
+                                            "antes":
+                                                stock_antes,
+                                            "despues":
+                                                stock_despues,
+                                            "ajuste":
+                                                cantidad
                                         })
+
 
                                 if hubo_error:
                                     break
+
 
                                 pedidos_eliminar.append(
                                     id_pedido
                                 )
 
-                            # ==============================
-                            # GUARDAR ELIMINACIÓN
-                            # ==============================
+
+                            # ==========================
+                            # GUARDAR
+                            # ==========================
+
                             if not hubo_error:
 
-                                # Primero actualizar stock
-                                for sku, nuevo_stock in stock_temporal.items():
+                                # SOLO SKU afectados
+                                for sku in skus_afectados:
 
-                                    stock_original = inventario_db[
+                                    supabase.table(
+                                        "inventario"
+                                    ).update({
+                                        "stock_actual":
+                                            stock_temporal[
+                                                sku
+                                            ]
+                                    }).eq(
+                                        "sku",
                                         sku
-                                    ]['stock_actual']
+                                    ).execute()
 
-                                    if nuevo_stock != stock_original:
 
-                                        supabase.table(
-                                            "inventario"
-                                        ).update({
-                                            "stock_actual": nuevo_stock
-                                        }).eq(
-                                            "sku",
-                                            sku
-                                        ).execute()
-
-                                # Luego eliminar pedidos
-                                for id_pedido in pedidos_eliminar:
+                                # SOLO pedidos seleccionados
+                                for id_pedido in (
+                                    pedidos_eliminar
+                                ):
 
                                     supabase.table(
                                         "pedidos"
@@ -881,151 +1300,38 @@ with tab3:
                                         id_pedido
                                     ).execute()
 
+
                                 st.session_state[
                                     'msg_eliminacion_exitosa'
-                                ] = len(pedidos_eliminar)
+                                ] = len(
+                                    pedidos_eliminar
+                                )
 
                                 st.session_state[
                                     'movimientos_eliminacion'
-                                ] = movimientos_eliminacion
+                                ] = (
+                                    movimientos_eliminacion
+                                )
+
 
                                 cargar_todo.clear()
+
                                 st.rerun()
+
 
                     except Exception as e:
 
                         st.error(
-                            f"❌ Error al eliminar pedidos: {e}"
+                            f"❌ Error al eliminar "
+                            f"pedidos: {e}"
                         )
 
-            # ==================================================
-            # MENSAJES DESPUÉS DE GUARDAR
-            # ==================================================
-
-            if st.session_state.get(
-                'msg_edicion_exitosa',
-                False
-            ):
-
-                st.success(
-                    "✅ Cambios guardados correctamente."
-                )
-
-                movimientos = st.session_state.get(
-                    'movimientos_edicion',
-                    []
-                )
-
-                if movimientos:
-
-                    st.info(
-                        "📦 Movimientos realizados en inventario:"
-                    )
-
-                    pedido_actual = None
-
-                    for mov in movimientos:
-
-                        if mov["pedido"] != pedido_actual:
-
-                            st.markdown(
-                                f"**Pedido {mov['pedido']}**"
-                            )
-
-                            pedido_actual = mov["pedido"]
-
-                        signo = (
-                            "+"
-                            if mov["ajuste"] > 0
-                            else ""
-                        )
-
-                        st.write(
-                            f"• {mov['sku']}: "
-                            f"{mov['antes']} → "
-                            f"{mov['despues']} "
-                            f"({signo}{mov['ajuste']})"
-                        )
-
-                else:
-
-                    st.info(
-                        "ℹ️ No hubo movimientos de inventario."
-                    )
-
-                del st.session_state[
-                    'msg_edicion_exitosa'
-                ]
-
-                if 'movimientos_edicion' in st.session_state:
-                    del st.session_state[
-                        'movimientos_edicion'
-                    ]
-
-            # ==================================================
-            # MENSAJES DESPUÉS DE ELIMINAR
-            # ==================================================
-
-            if 'msg_eliminacion_exitosa' in st.session_state:
-
-                cantidad_eliminados = st.session_state[
-                    'msg_eliminacion_exitosa'
-                ]
-
-                st.success(
-                    f"✅ {cantidad_eliminados} pedido(s) "
-                    f"eliminado(s) correctamente."
-                )
-
-                movimientos = st.session_state.get(
-                    'movimientos_eliminacion',
-                    []
-                )
-
-                if movimientos:
-
-                    st.info(
-                        "📦 Stock devuelto al inventario:"
-                    )
-
-                    pedido_actual = None
-
-                    for mov in movimientos:
-
-                        if mov["pedido"] != pedido_actual:
-
-                            st.markdown(
-                                f"**Pedido {mov['pedido']}**"
-                            )
-
-                            pedido_actual = mov["pedido"]
-
-                        st.write(
-                            f"• {mov['sku']}: "
-                            f"{mov['antes']} → "
-                            f"{mov['despues']} "
-                            f"(+{mov['ajuste']})"
-                        )
-
-                else:
-
-                    st.info(
-                        "ℹ️ El pedido eliminado no requería "
-                        "devolver stock."
-                    )
-
-                del st.session_state[
-                    'msg_eliminacion_exitosa'
-                ]
-
-                if 'movimientos_eliminacion' in st.session_state:
-                    del st.session_state[
-                        'movimientos_eliminacion'
-                    ]
 
         else:
 
-            st.info("No hay pedidos para editar.")
+            st.info(
+                "No hay pedidos para editar."
+            )
 # --- PESTAÑA 4: INVENTARIO ---
 with tab4:
     st.header("📊 Inventario")

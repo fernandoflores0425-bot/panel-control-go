@@ -319,17 +319,62 @@ with tab2:
                             
                             altura_dinamica = min(500, (len(df_medio) * 35) + 40)
                             
-                            df_rutas = st.data_editor(
-                                df_estilo, 
-                                key=f"ed_{medio}", 
-                                height=altura_dinamica, 
-                                disabled=["id_pedido", "nombre", "celular", "distrito", "monto", "direccion", "producto", "business"], 
+                                 df_rutas = st.data_editor(
+                                df_estilo,
+                                key=f"ed_{medio}",
+                                height=altura_dinamica,
+                                disabled=[
+                                    "id_pedido", "nombre", "celular",
+                                    "distrito", "monto", "direccion",
+                                    "producto", "business"
+                                ],
                                 column_config={
-                                    "id_pedido": None, 
-                                    "estado": st.column_config.SelectboxColumn("Estado", options=opciones_estado_general),
-                                    "monto": st.column_config.NumberColumn("Monto", format="%.2f")
-                                }, 
-                                use_container_width=True, 
+                                    "id_pedido": None,
+
+                                    "estado": st.column_config.SelectboxColumn(
+                                        "Estado",
+                                        options=opciones_estado_general,
+                                        width="small"
+                                    ),
+
+                                    "nombre": st.column_config.TextColumn(
+                                        "Nombre",
+                                        width="small"
+                                    ),
+
+                                    "celular": st.column_config.TextColumn(
+                                        "Celular",
+                                        width="small"
+                                    ),
+
+                                    "distrito": st.column_config.TextColumn(
+                                        "Distrito",
+                                        width="small"
+                                    ),
+
+                                    "monto": st.column_config.NumberColumn(
+                                        "Monto",
+                                        format="%.2f",
+                                        width="small"
+                                    ),
+
+                                    "direccion": st.column_config.TextColumn(
+                                        "Dirección",
+                                        width="small"
+                                    ),
+
+                                    "producto": st.column_config.TextColumn(
+                                        "PRODUCTOS",
+                                        width="large",
+                                        help="Verificar todos los SKU del pedido"
+                                    ),
+
+                                    "business": st.column_config.TextColumn(
+                                        "Business",
+                                        width="small"
+                                    )
+                                },
+                                use_container_width=True,
                                 hide_index=True
                             )
                             

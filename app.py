@@ -319,7 +319,7 @@ with tab2:
                             
                             altura_dinamica = min(500, (len(df_medio) * 35) + 40)
                             
-                                 df_rutas = st.data_editor(
+                            df_rutas = st.data_editor(
                                 df_estilo,
                                 key=f"ed_{medio}",
                                 height=altura_dinamica,

@@ -318,6 +318,14 @@ with tab2:
                             df_estilo = df_medio[['id_pedido', 'estado', 'nombre', 'celular', 'distrito', 'monto', 'direccion', 'producto', 'business']].style.apply(resaltar_estados, axis=1)
                             
                             altura_dinamica = min(500, (len(df_medio) * 35) + 40)
+                         
+                            # Ancho dinámico según el producto más largo
+                            largo_maximo = df_medio["producto"].fillna("").astype(str).str.len().max()
+
+                            ancho_producto = max(
+                                180,
+                                min(int(largo_maximo * 9 + 30), 550)
+                            )                            
                             
                             df_rutas = st.data_editor(
                                 df_estilo,
@@ -365,7 +373,7 @@ with tab2:
 
                                     "producto": st.column_config.TextColumn(
                                         "PRODUCTOS",
-                                        width="large",
+                                        width=ancho_producto,
                                         help="Verificar todos los SKU del pedido"
                                     ),
 
